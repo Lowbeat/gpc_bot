@@ -11,6 +11,8 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
+log = logging.getLogger("link_parser")
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -34,7 +36,7 @@ HEADERS = {
 OZON_HEADERS = {
     **HEADERS,
     "Referer": "https://www.ozon.ru/",
-    "Origin": "https://www.ozon.ru",
+    "Origin": "https://www.ozon.ru/",
 }
 
 # WB API
@@ -46,7 +48,7 @@ WB_API_PARAMS = {
     "spp": "30",
 }
 
-URL_RE = re.compile(r"https?://\\S+", re.IGNORECASE)
+URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 # --- Allowed domains config ---
 _ALLOWED_DOMAINS: set[str] | None = None
@@ -127,7 +129,7 @@ async def fetch_page(url: str) -> dict:
         if allowed:
             domains_str = ", ".join(sorted(allowed))
             raise ConnectionError(
-                f"Домен не в списке разрешённых: {urlparse(url).netloc}\\n"
+                f"Домен не в списке разрешённых: {urlparse(url).netloc}\n"
                 f"Разрешены: {domains_str}"
             )
         raise ConnectionError(f"Домен не в списке разрешённых: {urlparse(url).netloc}")
@@ -140,7 +142,7 @@ async def fetch_page(url: str) -> dict:
     if "wildberries.ru" in domain:
         # Extract nm (article ID) from URL
         # URLs like: https://www.wildberries.ru/catalog/12345678/detail.aspx
-        m = re.search(r"/catalog/(\\d+)/", url)
+        m = re.search(r"/catalog/(\d+)", url)
         if m:
             wb_data = await _fetch_wb_api(m.group(1))
 
