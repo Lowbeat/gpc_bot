@@ -1,8 +1,10 @@
 """Загрузка страницы по ссылке и извлечение метаданных (название, описание, картинка)."""
 
 import html
+import json
 import re
 import socket
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -17,6 +19,41 @@ HEADERS = {
 }
 
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+# --- Allowed domains config ---
+_ALLOWED_DOMAINS: set[str] | None = None
+
+
+def _load_allowed_domains() -> set[str]:
+    """Загружает список разрешённых доменов из JSON-конфига."""
+    global _ALLOWED_DOMAINS
+    if _ALLOWED_DOMAINS is not None:
+        return _ALLOWED_DOMAINS
+
+    config_path = Path(__file__).with_name("allowed_domains.json")
+    if not config_path.exists():
+        _ALLOWED_DOMAINS = set()
+        return _ALLOWED_DOMAINS
+
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        domains = data.get("allowed_domains", [])
+        # Нормализуем: убираем www., приводим к нижнему регистру
+        _ALLOWED_DOMAINS = {d.lower().replace("www.", "") for d in domains}
+    except Exception:
+        _ALLOWED_DOMAINS = set()
+
+    return _ALLOWED_DOMAINS
+
+
+def is_domain_allowed(url: str) -> bool:
+    """Проверяет, что домен ссылки входит в белый список.
+    Если список пуст — разрешаем всё (обратная совместимость)."""
+    allowed = _load_allowed_domains()
+    if not allowed:
+        return True
+    domain = urlparse(url).netloc.lower().replace("www.", "")
+    return domain in allowed
 
 
 def extract_url(text: str) -> str | None:
@@ -53,6 +90,9 @@ def _abs(url: str, base: str) -> str:
 
 async def fetch_page(url: str) -> dict:
     """Возвращает dict: title, description, image, link."""
+    if not is_domain_allowed(url):
+        raise ConnectionError(f"Домен не в списке разрешённых: {urlparse(url).netloc}")
+
     result = {"title": None, "description": None, "image": None, "link": url}
     try:
         async with httpx.AsyncClient(

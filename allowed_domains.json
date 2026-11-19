@@ -1,0 +1,13 @@
+{
+  "allowed_domains": [
+    "ozon.ru",
+    "www.ozon.ru",
+    "aliexpress.ru",
+    "www.aliexpress.ru",
+    "ali.click",
+    "market.yandex.ru",
+    "www.market.yandex.ru",
+    "wildberries.ru",
+    "www.wildberries.ru"
+  ]
+}
