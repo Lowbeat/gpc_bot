@@ -221,3 +221,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# локальный конфиг с секретами (в git не коммитим)
+config.py

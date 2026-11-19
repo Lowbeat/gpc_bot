@@ -10,12 +10,23 @@ Telegram-бот: ссылка → пост в канал.
 - `bot.py` — логика бота (Telegram Bot API, python-telegram-bot)
 - `link_parser.py` — загрузка страницы, извлечение `og:title` / `og:image` / описания
 - `config.py.example` — шаблон настроек (токен + ID канала)
+- `config_runtime.py` — чтение настроек: env-переменные (`BOT_TOKEN`, `CHANNEL_ID`,
+  `CHAT_CHANNEL_MAP`) имеют приоритет над `config.py` — удобно для деплоя
+- `whoami.py` — утилита: показывает `chat.id` чата/канала, куда написала сообщение
+- `DEPLOY.md` — бесплатный хостинг и быстрый деплой (Render, Railway; почему не PythonAnywhere)
 - `requirements.txt`
 
 ## Установка и запуск
 ```bash
 pip install -r requirements.txt
 cp config.py.example config.py   # заполнить BOT_TOKEN и CHANNEL_ID
+python bot.py
+```
+Либо без config.py — через переменные окружения (так же настраивается на хостинге):
+```bash
+export BOT_TOKEN="..."
+export CHANNEL_ID="-1004447835579"
+export CHAT_CHANNEL_MAP="-1003743298448:-1004447835579"  # чат -> канал
 python bot.py
 ```
 

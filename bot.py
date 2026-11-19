@@ -26,7 +26,7 @@ from telegram.ext import (
     filters,
 )
 
-import config
+import config_runtime as config
 from link_parser import extract_url, fetch_page, download_image
 
 logging.basicConfig(
@@ -64,7 +64,7 @@ async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     if data.get("image"):
         image_bytes = await download_image(context.client, data["image"])
 
-    channel = config.CHANNEL_ID
+    channel = config.resolve_channel(chat.id if chat else None)
     try:
         if image_bytes:
             sent = await context.bot.send_photo(
