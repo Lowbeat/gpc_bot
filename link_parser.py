@@ -2,6 +2,7 @@
 
 import html
 import json
+import logging
 import re
 import socket
 from pathlib import Path
@@ -114,8 +115,8 @@ async def _fetch_wb_api(nm_id: str) -> dict | None:
             products = data.get("data", {}).get("products", [])
             if products:
                 return products[0]
-    except Exception:
-        return None
+    except Exception as e:
+        log.debug("WB API error for nm_id=%s: %s", nm_id, e)
     return None
 
 

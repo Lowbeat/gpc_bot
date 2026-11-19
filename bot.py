@@ -224,8 +224,6 @@ async def _post_init(application) -> None:
     me = await application.bot.get_me()
     BOT_USERNAME = me.username
     log.info("Бот запущен как @%s", BOT_USERNAME)
-    if int(os.environ.get("KEEP_ALIVE_MIN", "10")) > 0:
-        application.create_task(keep_awake())
 
 
 def main() -> None:
@@ -244,6 +242,10 @@ def main() -> None:
         .build()
     )
     log.info("Бот стартует. чат=%s канал=%s", config.CHAT_ID, config.CHANNEL_ID)
+
+    # Start keep_awake task properly (avoid PTB warning)
+    if int(os.environ.get("KEEP_ALIVE_MIN", "10")) > 0:
+        asyncio.create_task(keep_awake())
 
     async def debug_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Временный: логирует ВСЕ сообщения в группах для отладки."""
