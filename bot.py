@@ -231,10 +231,9 @@ def main() -> None:
     # get_me() синхронно вызывать нельзя (нет event loop) — юзернейм в post_init
     app.add_post_init(_post_init)
     log.info(
-        "Бот стартует. чат=%s канал=%s пар чат->канал=%d",
+        "Бот стартует. чат=%s канал=%s",
         config.CHAT_ID,
         config.CHANNEL_ID,
-        len(config.CHAT_CHANNEL_MAP),
     )
 
     app.add_handler(CommandHandler("start", start_handler))

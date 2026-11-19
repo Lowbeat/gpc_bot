@@ -5,17 +5,18 @@ Telegram-бот: ссылка → пост в канал (картинка + н�
 ## Файлы
 - `bot.py` — логика бота (python-telegram-bot, long polling)
 - `link_parser.py` — загрузка страницы, извлечение `og:title` / `og:image`
-- `config.py.example` — шаблон настроек (`BOT_TOKEN`, `CHAT_ID`, `CHANNEL_ID`)
+- `config.example.py` — шаблон настроек (`BOT_TOKEN`, `CHAT_ID`, `CHANNEL_ID`)
 - `config_runtime.py` — чтение настроек: env-переменные имеют приоритет над
   `config.py`, поэтому на хостинге достаточно задать их в Environment Variables
 - `whoami.py` — утилита: показывает `chat.id` чата/канала, где было сообщение
 - `DEPLOY.md` — бесплатный деплой (Render и др.) и про «засыпание» free-планов
 - `requirements.txt`
+- `allowed_domains.json` — белый список доменов для парсинга
 
 ## Быстрый старт локально
 ```bash
 pip install -r requirements.txt
-cp config.py.example config.py   # заполнить BOT_TOKEN, CHAT_ID, CHANNEL_ID
+cp config.example.py config.py   # заполнить BOT_TOKEN, CHAT_ID, CHANNEL_ID
 python bot.py
 ```
 Три настройки = три переменные окружения (так же они задаются на хостинге):
@@ -25,13 +26,10 @@ export CHAT_ID="-1003743298448"      # чат, откуда берём ссыл�
 export CHANNEL_ID="-1004447835579"   # канал, куда публикуем
 python bot.py
 ```
-Несколько каналов сразу — одной переменной `CHAT_CHANNEL_MAP`
-(формат `чат:канал,чат:канал`, см. DEPLOY.md).
 
 ## Как это работает
-Бот постит **только когда его тегнут** — в любом чате, включая привязанный:
-- `@bot_username https://...` в группе/чате → пост уходит в канал, привязанный
-  к этому чату (`CHAT_CHANNEL_MAP`), иначе в `CHANNEL_ID`;
+Бот постит **только когда его тегнут**:
+- `@bot_username https://...` в группе/чате → пост уходит в канал (`CHANNEL_ID`);
 - реплай сообщения бота со ссылкой тоже считается тегом;
 - в личке тегать не нужно — любая ссылка (и `/post <ссылка>`);
 - сообщения без упоминания бота игнорируются полностью.
