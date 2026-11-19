@@ -1,6 +1,6 @@
 """
-Telegram-бот: по ссылке (в привязанном чате или по тегу бота) делает небольшой
-пост (картинка + название + ссылка) и публикует его в канал.
+Telegram-бот: по тегу бота со ссылкой делает небольшой пост
+(картинка + название + ссылка) и публикует его в канал.
 
 Как использовать:
   1. pip install -r requirements.txt
@@ -8,11 +8,13 @@ Telegram-бот: по ссылке (в привязанном чате или п
      (на хостинге вместо этого задай эти же имена переменными окружения)
   3. python bot.py
 
-Бот реагирует на:
-  - любую ссылку в чате, привязанном к каналу (CHAT_ID / CHAT_CHANNEL_MAP);
-  - упоминание @username_bot со ссылкой в других группах;
-  - личное сообщение боту со ссылкой;
+Бот реагирует ТОЛЬКО на тег:
+  - упоминание @username_bot со ссылкой в группе/чате — пост уходит в канал,
+    привязанный к этому чату (CHAT_CHANNEL_MAP), иначе в CHANNEL_ID;
+  - личное сообщение боту со ссылкой (в ЛС тег не нужен);
+  - реплай на любое сообщение бота со ссылкой (считается тегом);
   - команду /post <ссылка>.
+Любые сообщения без упоминания бота игнорируются полностью.
 """
 
 import asyncio
@@ -138,37 +140,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await build_and_publish(update, context, url)
 
 
-def is_bot_mentioned(msg) -> bool:
-    """Проверяет, тегнут ли бот в сообщении (через entities или reply)."""
+def is_bot_mentioned(msg, bot_id: int = None) -> bool:
+    """Проверяет, тегнут ли бот в сообщении.
+
+    Считается тегом:
+      - прямое упоминание @username (в entities или текстом);
+      - entity типа mention;
+      - реплай на любое сообщение бота.
+    """
     if not BOT_USERNAME:
         return False
-    text = (msg.text or "") + " " + (msg.caption or "")
-    if f"@{BOT_USERNAME.lower()}" in text.lower():
+    uname = BOT_USERNAME.lower()
+
+    # 1) entities: text_link/mention с юзернеймом бота либо mentions
+    for ent in list(msg.entities or []) + list(msg.caption_entities or []):
+        if ent.type == "mention":
+            raw = msg.text if msg.entities else msg.caption
+            if raw and ent.offset is not None:
+                token = raw[ent.offset: ent.offset + ent.length].lstrip("@").lower()
+                if token == uname:
+                    return True
+        if getattr(ent, "user", None) and getattr(ent.user, "id", None):
+            if bot_id is not None and ent.user.id == bot_id:
+                return True
+            if ent.user.username and ent.user.username.lower() == uname:
+                return True
+
+    # 2) просто текстом (без entities), например в caption у фото
+    text = ((msg.text or "") + " " + (msg.caption or "")).lower()
+    if f"@{uname}" in text:
         return True
-    if msg.reply_to_message and msg.reply_to_message.from_user:
-        if msg.reply_to_message.from_user.username \
-           and msg.reply_to_message.from_user.username.lower() == BOT_USERNAME.lower():
-            return False  # реплай не считается тегом, но можно разрешить
+
+    # 3) реплай сообщению бота тоже считаем тегом
+    replied = msg.reply_to_message
+    if replied and replied.from_user:
+        if bot_id is not None and replied.from_user.id == bot_id:
+            return True
+        if replied.from_user.username and replied.from_user.username.lower() == uname:
+            return True
+
     return False
 
 
 async def group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработка сообщений в группах/чатах.
-
-    В «своём» чате (CHAT_ID или пара из CHAT_CHANNEL_MAP) реагируем на любую
-    ссылку; в остальных группах — только если бот тегнут.
-    """
+    """Обработка сообщений в группах/чатах — только по тегу бота."""
     msg = update.message
-    chat_id = update.effective_chat.id if update.effective_chat else None
-    is_known_chat = chat_id in config.CHAT_CHANNEL_MAP
-    mentioned = is_bot_mentioned(msg)
-    replied_to_bot = bool(
-        msg.reply_to_message
-        and msg.reply_to_message.from_user
-        and msg.reply_to_message.from_user.id == context.bot.id
-    )
-    if not (is_known_chat or mentioned or replied_to_bot):
-        return
+    if not is_bot_mentioned(msg, bot_id=context.bot.id):
+        return  # без упоминания бот молчит даже в привязанном чате
     await handle_message(update, context)
 
 
