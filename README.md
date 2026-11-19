@@ -44,3 +44,12 @@ Privacy Mode (`/setprivacy` → Disable) — иначе Telegram вообще н
 3. Бот — участник чата; для групп отключить Privacy Mode (`/setprivacy` → Disable).
 4. ID вида `-100XXXXXXXXXX` узнаются через `python whoami.py` (напиши что-нибудь
    в чат/канал → увидишь `chat.id=`).
+
+## Backlog
+- [ ] **WB API** — работает, но иногда 498 на HTML фолбэке. Проверить почему API не срабатывает всегда.
+- [ ] **Ozon** — 403 Forbidden. Решить: Playwright (headless browser) или API партнёра.
+- [ ] **Теги/меншны** — если не работают, проверить Privacy Mode (`/setprivacy` → Disable) и наличие бота в чате.
+- [ ] **Yandex Market / AliExpress** — протестировать парсинг.
+- [ ] **Playwright интеграция** — для Ozon и сложных сайтов.
+- [ ] **Dockerfile** — для деплоя на Render/Fly.io.
+- [ ] **Unit tests** — для link_parser и extract_url.
