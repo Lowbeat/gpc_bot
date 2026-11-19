@@ -1,43 +1,46 @@
-"""Утилита для получения ID чатов и каналов.
+"""Показать chat.id чата/канала, в который бот имеет доступ.
 
-Запуск:
-    BOT_TOKEN=... python whoami.py
-(или просто `python whoami.py`, если config.py заполнен)
+Запуск:  python whoami.py [BOT_TOKEN]
+Если токен не передан — берётся из переменной окружения BOT_TOKEN или config.py.
 
-Что делать:
-  1. Напиши боту в нужном чате / канале любое сообщение (например «id»).
-  2. В консоли появится chat.id — это то, что нужно для CHANNEL_ID / CHAT_CHANNEL_MAP.
-Для приватного канала/чата бот должен быть добавлен туда участником (для каналов — админом).
+Дальше напиши что угодно в нужный чат или канал (или отправь боту в личку) —
+в консоли появится строка вида:  chat.id=-1003743298448 type=supergroup title=...
 """
 
-import logging
+import asyncio
+import os
+import sys
 
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-
-import config_runtime as config
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("whoami")
+from telegram.ext import ApplicationBuilder, MessageHandler, filters
 
 
-async def show_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def show(update: Update, context) -> None:
     chat = update.effective_chat
-    log.info(
-        "chat.id=%s type=%s title=%r username=%s",
-        chat.id,
-        chat.type,
-        chat.title,
-        chat.username,
+    src = update.message or update.channel_post or update.edited_message
+    print(
+        f"chat.id={chat.id} type={chat.type} title={chat.title!r} "
+        f"user={src.from_user.id if src and src.from_user else None}",
+        flush=True,
     )
-    await update.message.reply_text(f"chat.id = {chat.id}\ntype = {chat.type}")
+
+
+async def run(token: str) -> None:
+    app = ApplicationBuilder().token(token).build()
+    app.add_handler(MessageHandler(filters.ALL, show))
+    me = await app.bot.get_me()
+    print(f"Бот @{me.username} запущен, жду сообщения...", flush=True)
+    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    await asyncio.sleep(60)
+    await app.updater.stop()
 
 
 def main() -> None:
-    app = ApplicationBuilder().token(config.BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.ALL, show_id))
-    log.info("Слушаю сообщения. Пиши боту куда надо и смотри chat.id в логе. Ctrl+C — выход.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    token = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("BOT_TOKEN")
+    if not token:
+        from config import BOT_TOKEN as token
+
+    asyncio.run(run(token))
 
 
 if __name__ == "__main__":
