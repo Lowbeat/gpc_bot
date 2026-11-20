@@ -5,6 +5,7 @@ import io
 import logging
 import logging.handlers
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -23,6 +24,20 @@ from link_parser import HEADERS, download_image
 
 import config_runtime as config
 from link_parser import extract_url, fetch_page, is_domain_allowed, _load_allowed_domains
+
+# Force IPv4 for Telegram API (Fly.io IPv6 routing issues)
+_orig_getaddrinfo = socket.getaddrinfo
+def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    """Force IPv4 resolution for all socket connections."""
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+socket.getaddrinfo = _ipv4_getaddrinfo
+
+# HTTP client with reasonable timeouts
+http_client = httpx.AsyncClient(
+    limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+    timeout=httpx.Timeout(connect=60.0, read=60.0, write=60.0, pool=60.0),
+    follow_redirects=True,
+)
 
 # Setup logging: DEBUG to file only if DEBUG=1, otherwise INFO; WARNING+ to console
 debug_mode = os.environ.get("DEBUG", "0") == "1"
@@ -337,12 +352,36 @@ def main() -> None:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-    app = (
+    # Force IPv4 for Telegram API (Fly.io IPv6 routing issues)
+        def _ipv4_resolver(host: str, port: int, family: int = socket.AF_INET, timeout: float = 5.0):
+            """Resolve only IPv4 addresses."""
+            infos = socket.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM)
+            return [(socket.AF_INET, info[4]) for info in infos]
+
+        # Custom HTTP transport with IPv4-only resolver
+        class IPv4HTTPTransport(httpx.AsyncHTTPTransport):
+            def __init__(self, *args, **kwargs):
+                # Use custom resolver for IPv4 only
+                from httpcore import AsyncConnectionPool, AsyncHTTPProxy
+                pool = AsyncConnectionPool(
+                    max_connections=10,
+                    max_keepalive_connections=5,
+                    keepalive_expiry=60.0,
+                    resolver=_ipv4_resolver,
+                )
+                super().__init__(*args, pool=pool, **kwargs)
+
+        http_client = httpx.AsyncClient(
+            transport=IPv4HTTPTransport(),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            timeout=httpx.Timeout(connect=60.0, read=60.0, write=60.0, pool=60.0),
+            follow_redirects=True,
+        )
+
+        app = (
             ApplicationBuilder()
             .token(config.BOT_TOKEN)
-            .connect_timeout(120.0)
-            .read_timeout(120.0)
-            .write_timeout(120.0)
+            .http_client(http_client)
             .post_init(_post_init)
             .build()
         )
