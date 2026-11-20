@@ -353,38 +353,25 @@ def main() -> None:
             asyncio.set_event_loop(loop)
 
     # Force IPv4 for Telegram API (Fly.io IPv6 routing issues)
-        def _ipv4_resolver(host: str, port: int, family: int = socket.AF_INET, timeout: float = 5.0):
-            """Resolve only IPv4 addresses."""
-            infos = socket.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM)
-            return [(socket.AF_INET, info[4]) for info in infos]
+    _orig_getaddrinfo = socket.getaddrinfo
+    def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        """Force IPv4 resolution for all socket connections."""
+        return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+    socket.getaddrinfo = _ipv4_getaddrinfo
 
-        # Custom HTTP transport with IPv4-only resolver
-        class IPv4HTTPTransport(httpx.AsyncHTTPTransport):
-            def __init__(self, *args, **kwargs):
-                # Use custom resolver for IPv4 only
-                from httpcore import AsyncConnectionPool, AsyncHTTPProxy
-                pool = AsyncConnectionPool(
-                    max_connections=10,
-                    max_keepalive_connections=5,
-                    keepalive_expiry=60.0,
-                    resolver=_ipv4_resolver,
-                )
-                super().__init__(*args, pool=pool, **kwargs)
-
-        http_client = httpx.AsyncClient(
-            transport=IPv4HTTPTransport(),
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-            timeout=httpx.Timeout(connect=60.0, read=60.0, write=60.0, pool=60.0),
-            follow_redirects=True,
-        )
-
-        app = (
-            ApplicationBuilder()
-            .token(config.BOT_TOKEN)
-            .http_client(http_client)
-            .post_init(_post_init)
-            .build()
-        )
+    app = (
+        ApplicationBuilder()
+        .token(config.BOT_TOKEN)
+        .connect_timeout(60.0)
+        .read_timeout(60.0)
+        .write_timeout(60.0)
+        .pool_timeout(60.0)
+        .get_updates_connect_timeout(60.0)
+        .get_updates_read_timeout(60.0)
+        .get_updates_write_timeout(60.0)
+        .post_init(_post_init)
+        .build()
+    )
     log.info("Бот стартует. чат=%s канал=%s", config.CHAT_ID, config.CHANNEL_ID)
 
     app.add_handler(CommandHandler("start", start_handler))
