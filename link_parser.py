@@ -142,31 +142,39 @@ async def fetch_page(url: str) -> dict:
     domain = urlparse(url).netloc.lower().replace("www.", "")
     headers = OZON_HEADERS if "ozon.ru" in domain else HEADERS
 
-    # WB: try API first
-    wb_data = None
+    # WB: try API first, then Playwright
     if "wildberries.ru" in domain:
-        # Extract nm (article ID) from URL
-        # URLs like: https://www.wildberries.ru/catalog/12345678/detail.aspx
         m = re.search(r"/catalog/(\d+)", url)
         if m:
             wb_data = await _fetch_wb_api(m.group(1))
+            if wb_data:
+                result = {"title": None, "description": None, "image": None, "link": url}
+                result["title"] = wb_data.get("name")
+                if wb_data.get("salePriceU"):
+                    price = wb_data["salePriceU"] / 100
+                    result["description"] = f"Цена: {price:.0f} ₽"
+                if wb_data.get("images"):
+                    result["image"] = wb_data["images"][0]
+                elif wb_data.get("image"):
+                    result["image"] = wb_data["image"]
+                result["domain"] = domain
+                return result
+        # Fallback to Playwright
+        log.debug("WB API failed, trying Playwright for %s", url)
+        pw_result = await _parse_wb_playwright(url)
+        if pw_result and pw_result.get("title"):
+            pw_result["description"] = f"Цена: {pw_result['price']} ₽" if pw_result.get("price") else None
+            return pw_result
 
-    result = {"title": None, "description": None, "image": None, "link": url}
+    # Ozon: try HTTP first, then Playwright
+    if "ozon.ru" in domain:
+        log.debug("Trying Playwright for Ozon: %s", url)
+        pw_result = await _parse_ozon_playwright(url)
+        if pw_result and pw_result.get("title"):
+            pw_result["description"] = f"Цена: {pw_result['price']} ₽" if pw_result.get("price") else None
+            return pw_result
 
-    # If WB API succeeded, use its data
-    if wb_data:
-        result["title"] = wb_data.get("name")
-        if wb_data.get("salePriceU"):
-            price = wb_data["salePriceU"] / 100
-            result["description"] = f"Цена: {price:.0f} ₽"
-        # Try to get image from WB API
-        if wb_data.get("images"):
-            # images is list of URLs
-            result["image"] = wb_data["images"][0]
-        elif wb_data.get("image"):
-            result["image"] = wb_data["image"]
-        return result
-
+    # Default HTTP parsing for other domains (Yandex Market, AliExpress, etc.)
     try:
         async with httpx.AsyncClient(
             headers=headers, follow_redirects=True, timeout=httpx.Timeout(15.0)
@@ -181,7 +189,7 @@ async def fetch_page(url: str) -> dict:
         raise ConnectionError(f"Не удалось загрузить страницу: {e}") from e
 
     if not text.strip():
-        return result
+        return {"title": None, "description": None, "image": None, "link": url, "domain": domain}
 
     soup = BeautifulSoup(text, "html.parser")
 
@@ -202,8 +210,13 @@ async def fetch_page(url: str) -> dict:
     # --- <title> как фолбэк ---
     html_title = soup.title.get_text(strip=True) if soup.title else None
 
-    result["title"] = html.unescape(og_title or html_title or "") or None
-    result["description"] = html.unescape(og_desc or "") or None
+    result = {
+        "title": html.unescape(og_title or html_title or "") or None,
+        "description": html.unescape(og_desc or "") or None,
+        "image": None,
+        "link": url,
+        "domain": domain,
+    }
 
     # --- картинка: og:image, иначе первый <img> с приличным src ---
     image = None
@@ -214,16 +227,11 @@ async def fetch_page(url: str) -> dict:
             src = img.get("src") or img.get("data-src") or img.get("data-original")
             if src and _is_valid_image_url(_abs(src, url)):
                 candidate = _abs(src, url)
-                # пропуск явных трекеров/мелких иконок по имени файла
                 if not re.search(r"(sprite|pixel|blank|logo-?small|favicon)", candidate, re.I):
                     image = candidate
                     break
 
-    # если это svg — telegram не примет как фото, но оставим, попробуем
     result["image"] = image
-
-    # домен для подписи
-    result["domain"] = urlparse(url).netloc.replace("www.", "")
     return result
 
 
@@ -256,3 +264,155 @@ async def download_image(client: httpx.AsyncClient, image_url: str, max_bytes: i
             return data if data else None
     except Exception:
         return None
+
+
+# --- Playwright parsing (for anti-bot sites: WB, Ozon) ---
+
+async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wait_timeout: int = 90000) -> str | None:
+    """Загружает страницу через Playwright (Chromium), возвращает HTML."""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        log.warning("Playwright not installed, skipping browser fetch")
+        return None
+
+    try:
+        async with async_playwright() as p:
+            # headless=False — видимый браузер, Cloudflare его реже детектирует
+            browser = await p.chromium.launch(
+                headless=False,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                ]
+            )
+            context = await browser.new_context(
+                user_agent=HEADERS["User-Agent"],
+                locale="ru-RU",
+                viewport={"width": 1280, "height": 720},
+                java_script_enabled=True,
+                bypass_csp=True,
+            )
+            await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
+            page = await context.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=wait_timeout)
+            
+            if wait_selector:
+                try:
+                    await page.wait_for_selector(wait_selector, timeout=wait_timeout)
+                except Exception:
+                    pass
+            
+            await page.wait_for_timeout(5000)
+            
+            html_content = await page.content()
+            await browser.close()
+            return html_content
+    except Exception as e:
+        log.debug("Playwright fetch failed for %s: %s", url, e)
+        return None
+
+
+async def _parse_wb_playwright(url: str) -> dict | None:
+    """Парсит WB через Playwright (обходит 403/498)."""
+    html_content = await _fetch_with_playwright(
+        url,
+        wait_selector="span.productImtName--QcvL_, h1, [class*='productImtName']",
+        wait_timeout=90000
+    )
+    if not html_content:
+        return None
+
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # Title: WB uses dynamic class names like productImtName--QcvL_
+    title = None
+    for sel in ["span[class*='productImtName']", "h1[class*='title']", "h1"]:
+        el = soup.select_one(sel)
+        if el and el.get_text(strip=True):
+            title = html.unescape(el.get_text(strip=True))
+            break
+
+    # Price
+    price = None
+    for sel in ["span[class*='productLinePriceWallet']", "[class*='price'] [class*='current']", "[data-auto='price']"]:
+        el = soup.select_one(sel)
+        if el:
+            price_text = el.get_text(strip=True)
+            import re
+            m = re.search(r"([\d\s]+)", price_text.replace("\u00a0", "").replace(" ", ""))
+            if m:
+                price = m.group(1).replace(" ", "")
+                break
+
+    # Image: WB serves from basket-XX.wbbasket.ru
+    image = None
+    og_image = _meta_content(soup, property="og:image") or _meta_content(soup, name="og:image")
+    if og_image and _is_valid_image_url(_abs(og_image, url)):
+        image = _abs(og_image, url)
+    else:
+        for sel in ["img[src*='basket-'][src*='wbbasket'][src*='images']", "img[src*='images'][src*='webp']"]:
+            img = soup.select_one(sel)
+            if img:
+                src = img.get("src") or img.get("data-src")
+                if src and _is_valid_image_url(_abs(src, url)):
+                    image = _abs(src, url)
+                    break
+
+    return {"title": title, "price": price, "image": image, "link": url, "domain": "wildberries.ru"}
+
+
+async def _parse_ozon_playwright(url: str) -> dict | None:
+    """Парсит Ozon через Playwright (обходит 403/anti-bot)."""
+    html_content = await _fetch_with_playwright(
+        url,
+        wait_selector="h1[data-auto='product-title'], h1[class*='heading'], h1",
+        wait_timeout=90000
+    )
+    if not html_content:
+        return None
+
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # Check for VPN/challenge page
+    if "выключите vpn" in html_content.lower() or "подозритель" in html_content.lower() or "captcha" in html_content.lower():
+        log.debug("Ozon challenge/VPN block detected")
+        return None
+
+    # Title
+    title = None
+    for sel in ["h1[data-auto='product-title']", "h1[class*='heading']", "h1"]:
+        el = soup.select_one(sel)
+        if el and el.get_text(strip=True):
+            title = html.unescape(el.get_text(strip=True))
+            break
+
+    # Price
+    price = None
+    for sel in ["[data-auto='price-value']", "[class*='price'] [class*='current']", "[class*='price'] span:first-child"]:
+        el = soup.select_one(sel)
+        if el:
+            price_text = el.get_text(strip=True)
+            import re
+            m = re.search(r"([\d\s]+)", price_text.replace("\u00a0", "").replace(" ", ""))
+            if m:
+                price = m.group(1).replace(" ", "")
+                break
+
+    # Image
+    image = None
+    og_image = _meta_content(soup, property="og:image") or _meta_content(soup, name="og:image")
+    if og_image and _is_valid_image_url(_abs(og_image, url)):
+        image = _abs(og_image, url)
+    else:
+        for sel in ["[data-auto='product-gallery'] img", "[class*='gallery'] img", "img[src*='ozon']"]:
+            img = soup.select_one(sel)
+            if img:
+                src = img.get("src") or img.get("data-src")
+                if src and _is_valid_image_url(_abs(src, url)):
+                    image = _abs(src, url)
+                    break
+
+    return {"title": title, "price": price, "image": image, "link": url, "domain": "ozon.ru"}
