@@ -228,3 +228,8 @@ __marimo__/
 
 # локальный конфиг с секретами (в git не коммитим)
 config.py
+
+# Fly.io сгенерированные файлы
+fly.toml
+.dockerignore
+.github/workflows/fly-deploy.yml
