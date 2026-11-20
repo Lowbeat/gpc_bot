@@ -6,11 +6,10 @@ Telegram-бот: ссылка → пост в канал (картинка + н�
 - `bot.py` — логика бота (python-telegram-bot, long polling)
 - `link_parser.py` — загрузка страницы, извлечение `og:title` / `og:image`
 - `config.example.py` — шаблон настроек (`BOT_TOKEN`, `CHAT_ID`, `CHANNEL_ID`)
-- `config_runtime.py` — чтение настроек: env-переменные имеют приоритет над
-  `config.py`, поэтому на хостинге достаточно задать их в Environment Variables
+- `config_runtime.py` — чтение настроек: env-переменные имеют приоритет над `config.py`
 - `whoami.py` — утилита: показывает `chat.id` чата/канала, где было сообщение
 - `DEPLOY.md` — бесплатный деплой (Render и др.) и про «засыпание» free-планов
-- `requirements.txt`
+- `requirements.txt` — зависимости проекта (`python-telegram-bot`, `httpx`, `beautifulsoup4`); ставить через `pip install -r requirements.txt`
 - `allowed_domains.json` — белый список доменов для парсинга
 
 ## Быстрый старт локально
@@ -46,10 +45,11 @@ Privacy Mode (`/setprivacy` → Disable) — иначе Telegram вообще н
    в чат/канал → увидишь `chat.id=`).
 
 ## Backlog
-- [ ] **WB API** — работает, но иногда 498 на HTML фолбэке. Проверить почему API не срабатывает всегда.
-- [ ] **Ozon** — 403 Forbidden. Решить: Playwright (headless browser) или API партнёра.
-- [ ] **Теги/меншны** — если не работают, проверить Privacy Mode (`/setprivacy` → Disable) и наличие бота в чате.
-- [ ] **Yandex Market / AliExpress** — протестировать парсинг.
-- [ ] **Playwright интеграция** — для Ozon и сложных сайтов.
-- [ ] **Dockerfile** — для деплоя на Render/Fly.io.
-- [ ] **Unit tests** — для link_parser и extract_url.
+- [ ] **WB API** — оба эндпоинта (`card.wb.ru`, `catalog.wb.ru`) возвращают 403. HTML фолбэк даёт 498. Парсить WB через прямой HTTP сейчас невозможно. Пока только Yandex Market, AliExpress, Ozon (с ограничениями).
+- [ ] **Ozon** — 403 Forbidden (anti-bot `ozon-antibot: 1`). Решение: Playwright (headless Chromium).
+- [ ] **Playwright на Render free** — не запустится: 512 МБ RAM лимит, а Chromium + Python процесс уже превышают его (OOM kill даже при 1 инстансе). Для Playwright нужен Fly.io free (2 ГБ RAM) или Render Starter ($7/мес).
+- [ ] **Докер/Деплой** — `Dockerfile` для Render/Fly.io.
+- [ ] **Unit tests** — для `link_parser` и `extract_url`.
+- [ ] **keep_awake** — опциональная страховка против засыпания Render free. Выключается `KEEP_ALIVE_MIN=0`.
+
+Партнёрские API (WB/Ozon) — не нужны, доступов нет.
