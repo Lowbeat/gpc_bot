@@ -171,46 +171,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = " ".join(text_parts)
     log.debug("handle_message: text=%r", text)
 
-    # For /post command, extract URL after the command
     url = None
     comment = None
+
+    # For /post command, extract URL after the command
     if msg.text and msg.text.startswith("/post"):
         parts = msg.text.split(maxsplit=1)
         if len(parts) > 1:
             rest = parts[1].strip()
-            # Split URL and comment (comment is everything after the URL)
             url_match = extract_url(rest)
             if url_match:
                 url = url_match
-                # Get comment text after the URL
                 url_end = rest.find(url) + len(url)
                 comment = rest[url_end:].strip()
             log.debug("handle_message: /post command url=%r comment=%r", url, comment)
 
-    # Fallback to entity extraction
-    if not url:
-        url = extract_url(text)
-        log.debug("handle_message: extracted url=%r", url)
-
-    # Fallback: try to get URL from Telegram entities
-    if not url and msg.entities:
+    # Try to extract URL and comment from entities first (most accurate)
+    if msg.entities:
         for ent in msg.entities:
             if ent.type == "url" and msg.text and ent.offset is not None and ent.length is not None:
                 url = msg.text[ent.offset:ent.offset + ent.length]
-                # Get comment text after the URL
                 comment = msg.text[ent.offset + ent.length:].strip()
-                log.debug("handle_message: entity fallback url=%r comment=%r", url, comment)
+                log.debug("handle_message: entity url=%r comment=%r", url, comment)
                 break
 
-    # Fallback: try to get URL from caption entities
+    # Fallback: caption entities
     if not url and msg.caption_entities:
         for ent in msg.caption_entities:
             if ent.type == "url" and msg.caption and ent.offset is not None and ent.length is not None:
                 url = msg.caption[ent.offset:ent.offset + ent.length]
                 comment = msg.caption[ent.offset + ent.length:].strip()
-                log.debug("handle_message: caption entity fallback url=%r comment=%r", url, comment)
+                log.debug("handle_message: caption entity url=%r comment=%r", url, comment)
                 break
 
+    # Fallback: extract_url from plain text (no comment extraction)
+    if not url:
+        url = extract_url(text)
+        log.debug("handle_message: extracted url=%r", url)
+
+    # Fallback: plain text starts with http
     if not url:
         if msg.text and msg.text.strip().startswith(("http://", "https://")):
             url = msg.text.strip()
