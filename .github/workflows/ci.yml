@@ -28,7 +28,7 @@ jobs:
 
       - name: Run tests
         run: |
-          python -m pytest test_link_parser.py -v
+          python -m pytest test_link_parser.py -v --tb=short
 
       - name: Check syntax
         run: |
