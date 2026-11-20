@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 from telegram import Update, LinkPreviewOptions
-from telegram.constants import ParseMode
+from telegram.constants import ParseMode, MessageEntityType
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -153,12 +153,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 def is_bot_mentioned(msg, bot_id: int = None) -> bool:
     if not BOT_USERNAME:
+        log.debug("is_bot_mentioned: BOT_USERNAME not set")
         return False
     uname = BOT_USERNAME.lower()
+    log.debug("is_bot_mentioned: uname=%r, bot_id=%s, text=%r", uname, bot_id, msg.text or msg.caption)
 
     for ent in list(msg.entities or []) + list(msg.caption_entities or []):
+        log.debug("is_bot_mentioned: entity type=%s, offset=%s, length=%s, user=%s", ent.type, ent.offset, ent.length, getattr(ent, "user", None))
         # text_mention — это упоминание через @username в группе (с user object)
-        if ent.type == "text_mention":
+        if ent.type == MessageEntityType.TEXT_MENTION:
             if getattr(ent, "user", None):
                 if bot_id is not None and ent.user.id == bot_id:
                     return True
@@ -166,10 +169,11 @@ def is_bot_mentioned(msg, bot_id: int = None) -> bool:
                     return True
 
         # mention — это @username в тексте (без user object)
-        if ent.type == "mention":
+        if ent.type == MessageEntityType.MENTION:
             raw = msg.text if msg.entities else msg.caption
             if raw and ent.offset is not None:
                 token = raw[ent.offset: ent.offset + ent.length].lstrip("@").lower()
+                log.debug("is_bot_mentioned: mention token=%r, uname=%r, match=%s", token, uname, token == uname)
                 if token == uname:
                     return True
 
@@ -182,6 +186,7 @@ def is_bot_mentioned(msg, bot_id: int = None) -> bool:
 
     text = ((msg.text or "") + " " + (msg.caption or "")).lower()
     if f"@{uname}" in text:
+        log.debug("is_bot_mentioned: found @username in plain text")
         return True
 
     replied = msg.reply_to_message
@@ -191,13 +196,18 @@ def is_bot_mentioned(msg, bot_id: int = None) -> bool:
         if replied.from_user.username and replied.from_user.username.lower() == uname:
             return True
 
+    log.debug("is_bot_mentioned: no match found")
     return False
 
 
 async def group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
+    log.debug("group_handler: chat_id=%s text=%r entities=%s",
+              msg.chat_id, msg.text, msg.entities)
     if not is_bot_mentioned(msg, bot_id=context.bot.id):
+        log.debug("group_handler: bot not mentioned, ignoring")
         return
+    log.debug("group_handler: bot mentioned, processing")
     await handle_message(update, context)
 
 
@@ -247,16 +257,6 @@ def main() -> None:
     )
     log.info("Бот стартует. чат=%s канал=%s", config.CHAT_ID, config.CHANNEL_ID)
 
-    async def debug_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Временный: логирует ВСЕ сообщения в группах для отладки."""
-        msg = update.message
-        if msg:
-            entities = [
-                {"type": e.type, "offset": e.offset, "length": e.length, "user": getattr(e, "user", None)}
-                for e in (msg.entities or [])
-            ]
-            log.info("DEBUG GROUP: chat_id=%s text=%r entities=%s", msg.chat_id, msg.text, entities)
-
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("post", handle_message))
 
@@ -264,15 +264,6 @@ def main() -> None:
         MessageHandler(
             filters.ChatType.PRIVATE & (filters.TEXT | filters.CAPTION),
             handle_message,
-        )
-    )
-
-    # Временный: логирует ВСЕ сообщения в группах
-    app.add_handler(
-        MessageHandler(
-            (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP)
-            & (filters.TEXT | filters.CAPTION),
-            debug_group_handler,
         )
     )
 

@@ -41,6 +41,7 @@ OZON_HEADERS = {
 
 # WB API
 WB_API_URL = "https://card.wb.ru/cards/v2/detail"
+WB_API_URL_ALT = "https://catalog.wb.ru/cards/v2/detail"
 WB_API_PARAMS = {
     "appType": "1",
     "curr": "rub",
@@ -109,16 +110,20 @@ def _abs(url: str, base: str) -> str:
 async def _fetch_wb_api(nm_id: str) -> dict | None:
     """Получает данные товара WB через их API."""
     params = {**WB_API_PARAMS, "nm": nm_id}
-    try:
-        async with httpx.AsyncClient(headers=HEADERS, timeout=httpx.Timeout(10.0)) as client:
-            resp = await client.get(WB_API_URL, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-            products = data.get("data", {}).get("products", [])
-            if products:
-                return products[0]
-    except Exception as e:
-        log.debug("WB API error for nm_id=%s: %s", nm_id, e)
+    urls = [WB_API_URL, WB_API_URL_ALT]
+    for url in urls:
+        try:
+            async with httpx.AsyncClient(headers=HEADERS, timeout=httpx.Timeout(10.0)) as client:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 403:
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                products = data.get("data", {}).get("products", [])
+                if products:
+                    return products[0]
+        except Exception as e:
+            log.debug("WB API error for nm_id=%s url=%s: %s", nm_id, url, e)
     return None
 
 
