@@ -9,7 +9,7 @@ Telegram-бот: ссылка → пост в канал (картинка + н�
 - `config_runtime.py` — чтение настроек: env-переменные имеют приоритет над `config.py`
 - `whoami.py` — утилита: показывает `chat.id` чата/канала, где было сообщение
 - `DEPLOY.md` — бесплатный деплой (Render и др.) и про «засыпание» free-планов
-- `requirements.txt` — зависимости проекта (`python-telegram-bot`, `httpx`, `beautifulsoup4`); ставить через `pip install -r requirements.txt`
+- `requirements.txt` — зависимости проекта (`python-telegram-bot`, `httpx`, `beautifulsoup4`, `playwright`); ставить через `pip install -r requirements.txt`
 - `allowed_domains.json` — белый список доменов для парсинга
 
 ## Быстрый старт локально
@@ -27,11 +27,44 @@ python bot.py
 ```
 
 ## Как это работает
-Бот постит **только когда его тегнут**:
-- `@bot_username https://...` в группе/чате → пост уходит в канал (`CHANNEL_ID`);
-- реплай сообщения бота со ссылкой тоже считается тегом;
-- в личке тегать не нужно — любая ссылка (и `/post <ссылка>`);
-- сообщения без упоминания бота игнорируются полностью.
+Бот постит **только когда его тегнут** (4 способа передать ссылку):
+1. **Тег в группе/чате**: `@bot_username https://...` → пост уходит в канал (`CHANNEL_ID`);
+2. **Реплай на сообщение бота** со ссылкой — тоже считается тегом;
+3. **В личке (DM)**: тегать не нужно — просто пришли ссылку;
+4. **Команда `/post`**: в **чате/группе** — `/post https://...` (бот должен быть в чате);
+5. **Комментарий к посту**: текст после ссылки (через пробел) попадёт в пост как цитата `<blockquote>`.
+
+Сообщения без упоминания бота (в группах) игнорируются полностью.
+
+### Примеры использования
+**В группе (бот должен быть участником):**
+```
+@god_of_gpc_bot https://www.wildberries.ru/catalog/12345/detail.aspx
+```
+или реплай на сообщение бота:
+```
+> @god_of_gpc_bot https://www.wildberries.ru/catalog/12345/detail.aspx
+https://www.ozon.ru/product/67890/
+```
+или команда `/post`:
+```
+/post https://market.yandex.ru/product--12345
+```
+
+**В личке (тегать не нужно):**
+```
+https://aliexpress.ru/item/1005013068124123.html
+```
+```
+https://www.wildberries.ru/catalog/12345/detail.aspx Отличная вещь, беру!
+```
+
+**С комментарием (работает везде):**
+```
+@god_of_gpc_bot https://market.yandex.ru/product--12345 Цена отличная, заказываю
+```
+В посте появится:
+> Цена отличная, заказываю
 
 Важно: чтобы бот видел упоминания в группах, у него должен быть выключен
 Privacy Mode (`/setprivacy` → Disable) — иначе Telegram вообще не присылает
@@ -54,7 +87,7 @@ Privacy Mode (`/setprivacy` → Disable) — иначе Telegram вообще н
 - [x] **Комментарий к посту** — текст после ссылки попадает в пост как цитата (`<blockquote>`)
 - [ ] **Среднерыночная цена** — получение и отображение средней цены по маркетплейсам
 - [ ] **Dockerfile** — для деплоя на Render/Fly.io (Playwright нужен контейнер с Chromium)
-- [x] **Unit tests** — для `link_parser` и `extract_url` (GitHub Actions CI)
+- [x] **Unit tests** — для `link_parser` и `extract_url` (GitHub Actions CI, запускаются автоматически при push/PR)
 - [ ] **keep_awake** — опционально, `KEEP_ALIVE_MIN=0` выключает
 
 Партнёрские API (WB/Ozon) — не нужны, доступов нет.
