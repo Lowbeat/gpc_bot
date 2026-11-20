@@ -367,24 +367,26 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
         return None
 
     try:
-        async with async_playwright() as p:
-            # headless=False — видимый браузер, Cloudflare его реже детектирует
-            browser = await p.chromium.launch(
-                headless=False,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled",
-                ]
-            )
-            context = await browser.new_context(
-                user_agent=HEADERS["User-Agent"],
-                locale="ru-RU",
-                viewport={"width": 1280, "height": 720},
-                java_script_enabled=True,
-                bypass_csp=True,
-            )
-            await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            async with async_playwright() as p:
+                # headless=True with stealth — less resource usage, still bypasses basic anti-bot
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-web-security",
+                        "--disable-features=IsolateOrigins,site-per-process",
+                    ]
+                )
+                context = await browser.new_context(
+                    user_agent=HEADERS["User-Agent"],
+                    locale="ru-RU",
+                    viewport={"width": 1280, "height": 720},
+                    java_script_enabled=True,
+                    bypass_csp=True,
+                )
+                await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
             page = await context.new_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=wait_timeout)

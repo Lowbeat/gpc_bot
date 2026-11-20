@@ -103,38 +103,45 @@ async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         user_name = "незнакомец"
 
     # Build caption with price and store link
-    domain = data.get("domain", "").lower()
-    store_names = {
-        "wildberries.ru": "Wildberries",
-        "ozon.ru": "Ozon",
-        "market.yandex.ru": "Яндекс Маркет",
-        "aliexpress.ru": "AliExpress",
-        "ali.click": "AliExpress",
-    }
-    store_name = store_names.get(domain, domain)
+        domain = data.get("domain", "").lower()
+        store_names = {
+            "wildberries.ru": "Wildberries",
+            "ozon.ru": "Ozon",
+            "market.yandex.ru": "Яндекс Маркет",
+            "aliexpress.ru": "AliExpress",
+            "ali.click": "AliExpress",
+        }
+        store_logos = {
+            "aliexpress.ru": "https://cdn-icons-png.flaticon.com/512/5968/5968282.png",
+            "ali.click": "https://cdn-icons-png.flaticon.com/512/5968/5968282.png",
+        }
+        store_name = store_names.get(domain, domain)
+        store_logo = store_logos.get(domain)
 
-    # Price: from description (old) or price field (Playwright/API)
-    price_line = ""
-    if data.get("price"):
-        price_val = data["price"]
-        # Parse "sale (regular)" format
-        if "(" in price_val and ")" in price_val:
-            sale_part = price_val.split("(")[0].strip()
-            regular_part = price_val.split("(")[1].split(")")[0].strip()
-            price_line = f"💰 Цена: {sale_part}₽ ({regular_part}₽)\n"
-        else:
-            price_line = f"💰 Цена: {price_val}₽\n"
-    elif data.get("description") and data["description"].startswith("Цена:"):
-        price_line = f"💰 {data['description']}\n"
+        # Price: from description (old) or price field (Playwright/API)
+        price_line = ""
+        store_display = f'<a href="{safe_url}">{store_name}</a>'
+        if store_logo:
+            store_display = f'<a href="{safe_url}"><img src="{store_logo}" width="16" height="16"/> {store_name}</a>'
 
-    store_link = f"<a href=\"{safe_url}\">{store_name}</a>"
+        if data.get("price"):
+            price_val = data["price"]
+            # Parse "sale (regular)" format
+            if "(" in price_val and ")" in price_val:
+                sale_part = price_val.split("(")[0].strip()
+                regular_part = price_val.split("(")[1].split(")")[0].strip()
+                price_line = f"💰 Цена: {sale_part}₽ ({regular_part}₽)\n"
+            else:
+                price_line = f"💰 Цена: {price_val}₽\n"
+        elif data.get("description") and data["description"].startswith("Цена:"):
+            price_line = f"💰 {data['description']}\n"
 
     # Comment from user (text after URL)
     comment_line = ""
     if comment:
         comment_line = f"\n\n<blockquote>{escape(comment)}</blockquote>"
 
-    caption = f"<b>{escape(title)}</b>\n\n{price_line}{store_link}{comment_line}\n\n👤 <i>От {user_name}</i>"
+    caption = f"<b>{escape(title)}</b>\n\n{price_line}{store_display}{comment_line}\n\n👤 <i>От {user_name}</i>"
 
     image_bytes = None
     if data.get("image"):
@@ -355,23 +362,16 @@ def main() -> None:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-    # Force IPv4 for Telegram API (Fly.io IPv6 routing issues)
-    _orig_getaddrinfo = socket.getaddrinfo
-    def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-        """Force IPv4 resolution for all socket connections."""
-        return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
-    socket.getaddrinfo = _ipv4_getaddrinfo
-
     app = (
         ApplicationBuilder()
         .token(config.BOT_TOKEN)
-        .connect_timeout(60.0)
-        .read_timeout(60.0)
-        .write_timeout(60.0)
-        .pool_timeout(60.0)
-        .get_updates_connect_timeout(60.0)
-        .get_updates_read_timeout(60.0)
-        .get_updates_write_timeout(60.0)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .pool_timeout(30.0)
+        .get_updates_connect_timeout(30.0)
+        .get_updates_read_timeout(30.0)
+        .get_updates_write_timeout(30.0)
         .post_init(_post_init)
         .build()
     )
