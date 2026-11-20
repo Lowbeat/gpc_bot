@@ -10,9 +10,15 @@
 
 import os
 
-from config import BOT_TOKEN as _TOKEN_FROM_FILE
-from config import CHAT_ID as _CHAT_FROM_FILE
-from config import CHANNEL_ID as _CHANNEL_FROM_FILE
+# Optional import from config.py (not in git)
+try:
+    from config import BOT_TOKEN as _TOKEN_FROM_FILE
+    from config import CHAT_ID as _CHAT_FROM_FILE
+    from config import CHANNEL_ID as _CHANNEL_FROM_FILE
+except ImportError:
+    _TOKEN_FROM_FILE = None
+    _CHAT_FROM_FILE = None
+    _CHANNEL_FROM_FILE = None
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or _TOKEN_FROM_FILE
 
@@ -37,13 +43,13 @@ def _env_chat(name: str, default: int | str | None = None) -> int | str | None:
 
 
 # Канал, куда публикуем пост
-CHANNEL_ID: int | str = _env_chat("CHANNEL_ID", _CHANNEL_FROM_FILE) or _CHANNEL_FROM_FILE
+CHANNEL_ID: int | str | None = _env_chat("CHANNEL_ID", _CHANNEL_FROM_FILE) or _CHANNEL_FROM_FILE
 
 # Чат, из которого берём ссылки (бот реагирует только на тег/реплай в этом чате)
-CHAT_ID: int | str = _env_chat("CHAT_ID", _CHAT_FROM_FILE) or _CHAT_FROM_FILE
+CHAT_ID: int | str | None = _env_chat("CHAT_ID", _CHAT_FROM_FILE) or _CHAT_FROM_FILE
 
 
-def resolve_channel(chat_id) -> int | str:
+def resolve_channel(chat_id) -> int | str | None:
     """Канал-получатель для сообщения из чата `chat_id`.
     Всегда возвращает CHANNEL_ID — привязка 1:1."""
     return CHANNEL_ID
@@ -52,6 +58,6 @@ def resolve_channel(chat_id) -> int | str:
 def channel_username(chat_id=None) -> str | None:
     """Юзернейм канала (для ссылки на пост), если канал публичный (@name)."""
     target = resolve_channel(chat_id)
-    if isinstance(target, str) and target.startswith("@"):
+    if target and isinstance(target, str) and target.startswith("@"):
         return target[1:]
     return None

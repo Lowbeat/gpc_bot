@@ -6,11 +6,10 @@ Telegram-бот: ссылка → пост в канал (картинка + н�
 - `bot.py` — логика бота (python-telegram-bot, long polling)
 - `link_parser.py` — загрузка страницы, извлечение `og:title` / `og:image`
 - `config.example.py` — шаблон настроек (`BOT_TOKEN`, `CHAT_ID`, `CHANNEL_ID`)
-- `config_runtime.py` — чтение настроек: env-переменные имеют приоритет над
-  `config.py`, поэтому на хостинге достаточно задать их в Environment Variables
+- `config_runtime.py` — чтение настроек: env-переменные имеют приоритет над `config.py`
 - `whoami.py` — утилита: показывает `chat.id` чата/канала, где было сообщение
 - `DEPLOY.md` — бесплатный деплой (Render и др.) и про «засыпание» free-планов
-- `requirements.txt`
+- `requirements.txt` — зависимости проекта (`python-telegram-bot`, `httpx`, `beautifulsoup4`); ставить через `pip install -r requirements.txt`
 - `allowed_domains.json` — белый список доменов для парсинга
 
 ## Быстрый старт локально
@@ -46,10 +45,16 @@ Privacy Mode (`/setprivacy` → Disable) — иначе Telegram вообще н
    в чат/канал → увидишь `chat.id=`).
 
 ## Backlog
-- [ ] **WB API** — работает, но иногда 498 на HTML фолбэке. Проверить почему API не срабатывает всегда.
-- [ ] **Ozon** — 403 Forbidden. Решить: Playwright (headless browser) или API партнёра.
-- [ ] **Теги/меншны** — если не работают, проверить Privacy Mode (`/setprivacy` → Disable) и наличие бота в чате.
-- [ ] **Yandex Market / AliExpress** — протестировать парсинг.
-- [ ] **Playwright интеграция** — для Ozon и сложных сайтов.
-- [ ] **Dockerfile** — для деплоя на Render/Fly.io.
-- [ ] **Unit tests** — для link_parser и extract_url.
+- [x] **WB парсинг** — название, картинка, цена (Playwright работает локально)
+- [ ] **Ozon парсинг** — структура готова, локально блокирует VPN IP (188.243.70.16). На чистом IP (Fly.io/сервер) будет работать
+- [x] **Yandex Market парсинг** — JSON-LD (Product schema): title, price (card), image, link
+- [x] **AliExpress парсинг** — базовый HTTP (og:tags), Playwright опционально для цен
+- [x] **Playwright интеграция** — headless Chromium для WB/Ozon (антибот обходится только браузером)
+- [x] **Сборка сообщения** — пост в канал: картинка + заголовок + цена + ссылка + автор тега
+- [x] **Комментарий к посту** — текст после ссылки попадает в пост как цитата (`<blockquote>`)
+- [ ] **Среднерыночная цена** — получение и отображение средней цены по маркетплейсам
+- [ ] **Dockerfile** — для деплоя на Render/Fly.io (Playwright нужен контейнер с Chromium)
+- [x] **Unit tests** — для `link_parser` и `extract_url` (GitHub Actions CI)
+- [ ] **keep_awake** — опционально, `KEEP_ALIVE_MIN=0` выключает
+
+Партнёрские API (WB/Ozon) — не нужны, доступов нет.
