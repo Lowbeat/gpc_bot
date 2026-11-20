@@ -338,13 +338,13 @@ def main() -> None:
             asyncio.set_event_loop(loop)
 
     app = (
-        ApplicationBuilder()
-        .token(config.BOT_TOKEN)
-        .connect_timeout(30.0)
-        .read_timeout(30.0)
-        .post_init(_post_init)
-        .build()
-    )
+            ApplicationBuilder()
+            .token(config.BOT_TOKEN)
+            .connect_timeout(60.0)
+            .read_timeout(60.0)
+            .post_init(_post_init)
+            .build()
+        )
     log.info("Бот стартует. чат=%s канал=%s", config.CHAT_ID, config.CHANNEL_ID)
 
     app.add_handler(CommandHandler("start", start_handler))
