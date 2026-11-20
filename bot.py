@@ -340,8 +340,9 @@ def main() -> None:
     app = (
             ApplicationBuilder()
             .token(config.BOT_TOKEN)
-            .connect_timeout(60.0)
-            .read_timeout(60.0)
+            .connect_timeout(120.0)
+            .read_timeout(120.0)
+            .write_timeout(120.0)
             .post_init(_post_init)
             .build()
         )
