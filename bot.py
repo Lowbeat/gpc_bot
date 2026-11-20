@@ -24,12 +24,15 @@ from link_parser import HEADERS, download_image
 import config_runtime as config
 from link_parser import extract_url, fetch_page, is_domain_allowed, _load_allowed_domains
 
-# Setup logging: DEBUG to file, WARNING+ to console
+# Setup logging: DEBUG to file only if DEBUG=1, otherwise INFO; WARNING+ to console
+debug_mode = os.environ.get("DEBUG", "0") == "1"
+log_level = logging.DEBUG if debug_mode else logging.INFO
+
 log_file = Path(__file__).with_name("bot.log")
 file_handler = logging.handlers.RotatingFileHandler(
     log_file, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
 )
-file_handler.setLevel(logging.DEBUG)
+file_handler.setLevel(log_level)
 file_handler.setFormatter(logging.Formatter(
     "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 ))
@@ -41,7 +44,7 @@ console_handler.setFormatter(logging.Formatter(
 ))
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=log_level,
     handlers=[file_handler, console_handler],
 )
 log = logging.getLogger("bot")
