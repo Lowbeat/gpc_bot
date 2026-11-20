@@ -36,6 +36,36 @@ python bot.py
 
 Сообщения без упоминания бота (в группах) игнорируются полностью.
 
+### Примеры использования
+**В группе (бот должен быть участником):**
+```
+@god_of_gpc_bot https://www.wildberries.ru/catalog/12345/detail.aspx
+```
+или реплай на сообщение бота:
+```
+> @god_of_gpc_bot https://www.wildberries.ru/catalog/12345/detail.aspx
+https://www.ozon.ru/product/67890/
+```
+или команда `/post`:
+```
+/post https://market.yandex.ru/product--12345
+```
+
+**В личке (тегать не нужно):**
+```
+https://aliexpress.ru/item/1005013068124123.html
+```
+```
+https://www.wildberries.ru/catalog/12345/detail.aspx Отличная вещь, беру!
+```
+
+**С комментарием (работает везде):**
+```
+@god_of_gpc_bot https://market.yandex.ru/product--12345 Цена отличная, заказываю
+```
+В посте появится:
+> Цена отличная, заказываю
+
 Важно: чтобы бот видел упоминания в группах, у него должен быть выключен
 Privacy Mode (`/setprivacy` → Disable) — иначе Telegram вообще не присылает
 ему обычные сообщения, и тег до бота не дойдёт.
