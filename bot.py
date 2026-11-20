@@ -19,8 +19,10 @@ from telegram.ext import (
     filters,
 )
 
+from link_parser import HEADERS, download_image
+
 import config_runtime as config
-from link_parser import extract_url, fetch_page, download_image, is_domain_allowed, _load_allowed_domains
+from link_parser import extract_url, fetch_page, is_domain_allowed, _load_allowed_domains
 
 # Setup logging: DEBUG to file, WARNING+ to console
 log_file = Path(__file__).with_name("bot.log")
@@ -51,7 +53,7 @@ def escape(s: str) -> str:
     return s.replace("&", "&").replace("<", "<").replace(">", ">")
 
 
-async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str) -> None:
+async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, comment: str = None) -> None:
     chat = update.effective_chat
     msg = update.message or update.channel_post
     try:
@@ -65,12 +67,61 @@ async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         title = title[:197] + "..."
 
     safe_url = url.replace("&", "&")
-    user_name = msg.from_user.username or msg.from_user.first_name or "незнакомец"
-    caption = f"<b>{escape(title)}</b>\n\n🔗 <a href=\"{safe_url}\">Читать полностью</a>\n\n👤 <i>От @{user_name}</i>"
+    
+    # Get author info - handle anonymous group admins
+        # Get author info - handle anonymous group admins
+    user = msg.from_user
+    log.debug("build_and_publish: from_user=%s (id=%s, username=%s, first_name=%s, is_bot=%s)",
+              user, user.id if user else None, user.username if user else None, user.first_name if user else None, user.is_bot if user else None)
+    # Anonymous admin: username=GroupAnonymousBot, first_name=Group -> use chat title
+    if user and user.username and user.username != "GroupAnonymousBot":
+        user_name = f"@{user.username}"
+    elif user and user.first_name and user.first_name != "Group":
+        user_name = user.first_name
+    elif msg.sender_chat:
+        # Message sent on behalf of chat (channel/group) - use chat title
+        user_name = msg.sender_chat.title or "чат"
+    else:
+        user_name = "незнакомец"
+
+    # Build caption with price and store link
+    domain = data.get("domain", "").lower()
+    store_names = {
+        "wildberries.ru": "Wildberries",
+        "ozon.ru": "Ozon",
+        "market.yandex.ru": "Яндекс Маркет",
+        "aliexpress.ru": "AliExpress",
+        "ali.click": "AliExpress",
+    }
+    store_name = store_names.get(domain, domain)
+
+    # Price: from description (old) or price field (Playwright/API)
+    price_line = ""
+    if data.get("price"):
+        price_val = data["price"]
+        # Parse "sale (regular)" format
+        if "(" in price_val and ")" in price_val:
+            sale_part = price_val.split("(")[0].strip()
+            regular_part = price_val.split("(")[1].split(")")[0].strip()
+            price_line = f"💰 Цена: {sale_part}₽ ({regular_part}₽)\n"
+        else:
+            price_line = f"💰 Цена: {price_val}₽\n"
+    elif data.get("description") and data["description"].startswith("Цена:"):
+        price_line = f"💰 {data['description']}\n"
+
+    store_link = f"<a href=\"{safe_url}\">{store_name}</a>"
+
+    # Comment from user (text after URL)
+    comment_line = ""
+    if comment:
+        comment_line = f"\n\n<blockquote>{escape(comment)}</blockquote>"
+
+    caption = f"<b>{escape(title)}</b>\n\n{price_line}{store_link}{comment_line}\n\n👤 <i>От {user_name}</i>"
 
     image_bytes = None
     if data.get("image"):
-        image_bytes = await download_image(context.client, data["image"])
+        async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=httpx.Timeout(15.0)) as client:
+            image_bytes = await download_image(client, data["image"])
 
     channel = config.resolve_channel(chat.id if chat else None)
     try:
@@ -119,15 +170,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text_parts = [msg.text or "", msg.caption or ""]
     text = " ".join(text_parts)
     log.debug("handle_message: text=%r", text)
-    url = extract_url(text)
-    log.debug("handle_message: extracted url=%r", url)
+
+    # For /post command, extract URL after the command
+    url = None
+    comment = None
+    if msg.text and msg.text.startswith("/post"):
+        parts = msg.text.split(maxsplit=1)
+        if len(parts) > 1:
+            rest = parts[1].strip()
+            # Split URL and comment (comment is everything after the URL)
+            url_match = extract_url(rest)
+            if url_match:
+                url = url_match
+                # Get comment text after the URL
+                url_end = rest.find(url) + len(url)
+                comment = rest[url_end:].strip()
+            log.debug("handle_message: /post command url=%r comment=%r", url, comment)
+
+    # Fallback to entity extraction
+    if not url:
+        url = extract_url(text)
+        log.debug("handle_message: extracted url=%r", url)
 
     # Fallback: try to get URL from Telegram entities
     if not url and msg.entities:
         for ent in msg.entities:
             if ent.type == "url" and msg.text and ent.offset is not None and ent.length is not None:
                 url = msg.text[ent.offset:ent.offset + ent.length]
-                log.debug("handle_message: entity fallback url=%r", url)
+                # Get comment text after the URL
+                comment = msg.text[ent.offset + ent.length:].strip()
+                log.debug("handle_message: entity fallback url=%r comment=%r", url, comment)
+                break
+
+    # Fallback: try to get URL from caption entities
+    if not url and msg.caption_entities:
+        for ent in msg.caption_entities:
+            if ent.type == "url" and msg.caption and ent.offset is not None and ent.length is not None:
+                url = msg.caption[ent.offset:ent.offset + ent.length]
+                comment = msg.caption[ent.offset + ent.length:].strip()
+                log.debug("handle_message: caption entity fallback url=%r comment=%r", url, comment)
                 break
 
     if not url:
@@ -148,7 +229,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await msg.reply_text("Я не нашёл ссылку 🙂 Пришли, например: https://example.com/article")
         return
 
-    await build_and_publish(update, context, url)
+    await build_and_publish(update, context, url, comment)
 
 
 def is_bot_mentioned(msg, bot_id: int = None) -> bool:
@@ -202,6 +283,11 @@ def is_bot_mentioned(msg, bot_id: int = None) -> bool:
 
 async def group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
+    # Ignore channel posts and bot's own messages
+    if update.channel_post:
+        return
+    if msg.from_user and msg.from_user.id == context.bot.id:
+        return
     log.debug("group_handler: chat_id=%s text=%r entities=%s",
               msg.chat_id, msg.text, msg.entities)
     if not is_bot_mentioned(msg, bot_id=context.bot.id):

@@ -247,15 +247,12 @@ async def fetch_page(url: str) -> dict:
             pw_result["description"] = f"Цена: {pw_result['price']} ₽" if pw_result.get("price") else None
             return pw_result
 
-    # AliExpress: use Playwright (HTTP blocked by captcha)
+    # AliExpress: basic HTTP (og:tags) — skip Playwright due to captcha
     if "aliexpress.ru" in domain or "ali.click" in domain:
-        log.debug("Trying Playwright for AliExpress: %s", url)
-        pw_result = await _parse_aliexpress_playwright(url)
-        if pw_result and pw_result.get("title"):
-            pw_result["description"] = f"Цена: {pw_result['price']} ₽" if pw_result.get("price") else None
-            return pw_result
+        # Fall through to default HTTP parsing for og:title/og:image
+        pass
 
-    # Default HTTP parsing for other domains (Yandex Market, etc.)
+    # Default HTTP parsing for other domains (Yandex Market, AliExpress, etc.)
     try:
         # Use minimal headers for Yandex Market to get full HTML with JSON-LD
         if "market.yandex.ru" in domain:
