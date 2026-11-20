@@ -159,6 +159,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Logs
+*.log
+bot.log*
+
 # Conda environments
 conda-meta/
 

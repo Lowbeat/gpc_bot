@@ -25,14 +25,27 @@ async def show(update: Update, context) -> None:
     )
 
 
-async def run(token: str) -> None:
-    app = ApplicationBuilder().token(token).build()
+def run(token: str) -> None:
+    # Fix for Python 3.12+ event loop issue
+    if sys.version_info >= (3, 12):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+    async def _post_init(application):
+        me = await application.bot.get_me()
+        print(f"Бот @{me.username} запущен, жду сообщения...", flush=True)
+
+    app = (
+        ApplicationBuilder()
+        .token(token)
+        .post_init(_post_init)
+        .build()
+    )
     app.add_handler(MessageHandler(filters.ALL, show))
-    me = await app.bot.get_me()
-    print(f"Бот @{me.username} запущен, жду сообщения...", flush=True)
-    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-    await asyncio.sleep(60)
-    await app.updater.stop()
+    app.run_polling(allowed_updates=Update.ALL_TYPES, timeout=10, drop_pending_updates=True)
 
 
 def main() -> None:
@@ -40,7 +53,7 @@ def main() -> None:
     if not token:
         from config import BOT_TOKEN as token
 
-    asyncio.run(run(token))
+    run(token)
 
 
 if __name__ == "__main__":
