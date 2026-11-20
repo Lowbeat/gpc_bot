@@ -85,9 +85,8 @@ async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         title = title[:197] + "..."
 
     safe_url = url.replace("&", "&")
-    
+
     # Get author info - handle anonymous group admins
-        # Get author info - handle anonymous group admins
     user = msg.from_user
     log.debug("build_and_publish: from_user=%s (id=%s, username=%s, first_name=%s, is_bot=%s)",
               user, user.id if user else None, user.username if user else None, user.first_name if user else None, user.is_bot if user else None)
@@ -122,7 +121,8 @@ async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         price_line = ""
         store_display = f'<a href="{safe_url}">{store_name}</a>'
         if store_logo:
-            store_display = f'<a href="{safe_url}"><img src="{store_logo}" width="16" height="16"/> {store_name}</a>'
+            # Use emoji for AliExpress (Telegram doesn't support img tag in HTML)
+            store_display = f'<a href="{safe_url}">🛒 {store_name}</a>'
 
         if data.get("price"):
             price_val = data["price"]
@@ -135,6 +135,8 @@ async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 price_line = f"💰 Цена: {price_val}₽\n"
         elif data.get("description") and data["description"].startswith("Цена:"):
             price_line = f"💰 {data['description']}\n"
+        else:
+            price_line = ""
 
     # Comment from user (text after URL)
     comment_line = ""
@@ -313,7 +315,7 @@ async def group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if msg.from_user and msg.from_user.id == context.bot.id:
         return
     # Ignore messages forwarded from our own channel (bot's own posts in discussion group)
-    if msg.forward_from_chat and msg.forward_from_chat.id == config.CHANNEL_ID:
+    if getattr(msg, "forward_from_chat", None) and msg.forward_from_chat.id == config.CHANNEL_ID:
         return
     log.debug("group_handler: chat_id=%s text=%r entities=%s",
               msg.chat_id, msg.text, msg.entities)
@@ -350,7 +352,7 @@ async def _post_init(application) -> None:
 
     # Start keep_awake task properly (avoid PTB warning)
     if int(os.environ.get("KEEP_ALIVE_MIN", "10")) > 0:
-        application.create_task(keep_awake())
+        asyncio.create_task(keep_awake())
 
 
 def main() -> None:

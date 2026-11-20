@@ -115,7 +115,7 @@ async def _fetch_wb_api(nm_id: str) -> dict | None:
         try:
             async with httpx.AsyncClient(headers=HEADERS, timeout=httpx.Timeout(10.0)) as client:
                 resp = await client.get(url, params=params)
-                if resp.status_code == 403:
+                if resp.status_code in (403, 498):
                     continue
                 resp.raise_for_status()
                 data = resp.json()
@@ -367,26 +367,26 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
         return None
 
     try:
-            async with async_playwright() as p:
-                # headless=True with stealth — less resource usage, still bypasses basic anti-bot
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-web-security",
-                        "--disable-features=IsolateOrigins,site-per-process",
-                    ]
-                )
-                context = await browser.new_context(
-                    user_agent=HEADERS["User-Agent"],
-                    locale="ru-RU",
-                    viewport={"width": 1280, "height": 720},
-                    java_script_enabled=True,
-                    bypass_csp=True,
-                )
-                await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        async with async_playwright() as p:
+            # headless=False — visible browser for testing
+            browser = await p.chromium.launch(
+                headless=False,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-web-security",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                ]
+            )
+            context = await browser.new_context(
+                user_agent=HEADERS["User-Agent"],
+                locale="ru-RU",
+                viewport={"width": 1280, "height": 720},
+                java_script_enabled=True,
+                bypass_csp=True,
+            )
+            await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
             page = await context.new_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=wait_timeout)
@@ -398,13 +398,16 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
                     pass
 
             # Longer wait for AliExpress and other anti-bot sites
-            await page.wait_for_timeout(15000)
+            await page.wait_for_timeout(20000)
 
             html_content = await page.content()
+            print(f"DEBUG: Got HTML length: {len(html_content)}")
             await browser.close()
             return html_content
     except Exception as e:
         log.debug("Playwright fetch failed for %s: %s", url, e)
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -412,7 +415,7 @@ async def _parse_wb_playwright(url: str) -> dict | None:
     """Парсит WB через Playwright (обходит 403/498)."""
     html_content = await _fetch_with_playwright(
         url,
-        wait_selector="span.productImtName--QcvL_, h1, [class*='productImtName']",
+        wait_selector=None,
         wait_timeout=90000
     )
     if not html_content:
