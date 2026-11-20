@@ -45,11 +45,15 @@ Privacy Mode (`/setprivacy` → Disable) — иначе Telegram вообще н
    в чат/канал → увидишь `chat.id=`).
 
 ## Backlog
-- [ ] **WB API** — оба эндпоинта (`card.wb.ru`, `catalog.wb.ru`) возвращают 403. HTML фолбэк даёт 498. Парсить WB через прямой HTTP сейчас невозможно. Пока только Yandex Market, AliExpress, Ozon (с ограничениями).
-- [ ] **Ozon** — 403 Forbidden (anti-bot `ozon-antibot: 1`). Решение: Playwright (headless Chromium).
-- [ ] **Playwright на Render free** — не запустится: 512 МБ RAM лимит, а Chromium + Python процесс уже превышают его (OOM kill даже при 1 инстансе). Для Playwright нужен Fly.io free (2 ГБ RAM) или Render Starter ($7/мес).
-- [ ] **Докер/Деплой** — `Dockerfile` для Render/Fly.io.
-- [ ] **Unit tests** — для `link_parser` и `extract_url`.
-- [ ] **keep_awake** — опциональная страховка против засыпания Render free. Выключается `KEEP_ALIVE_MIN=0`.
+- [ ] **WB парсинг** — получить название, картинку, цену товара
+- [ ] **Ozon парсинг** — получить название, картинку, цену товара
+- [ ] **Yandex Market парсинг** — получить название, картинку, цену товара
+- [ ] **AliExpress парсинг** — получить название, картинку, цену товара
+- [ ] **Playwright интеграция** — headless Chromium для WB/Ozon (антибот обходится только браузером)
+- [ ] **Сборка сообщения** — пост в канал: картинка + заголовок + цена + ссылка + автор тега
+- [ ] **Среднерыночная цена** — получение и отображение средней цены по маркетплейсам
+- [ ] **Dockerfile** — для деплоя на Render/Fly.io (Playwright нужен контейнер с Chromium)
+- [ ] **Unit tests** — для `link_parser` и `extract_url`
+- [ ] **keep_awake** — опционально, `KEEP_ALIVE_MIN=0` выключает
 
 Партнёрские API (WB/Ozon) — не нужны, доступов нет.
