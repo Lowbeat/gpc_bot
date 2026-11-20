@@ -305,6 +305,9 @@ async def group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     if msg.from_user and msg.from_user.id == context.bot.id:
         return
+    # Ignore messages forwarded from our own channel (bot's own posts in discussion group)
+    if msg.forward_from_chat and msg.forward_from_chat.id == config.CHANNEL_ID:
+        return
     log.debug("group_handler: chat_id=%s text=%r entities=%s",
               msg.chat_id, msg.text, msg.entities)
     if not is_bot_mentioned(msg, bot_id=context.bot.id):
