@@ -8,8 +8,7 @@ Telegram-бот: ссылка → пост в канал (картинка + н�
 - `config.example.py` — шаблон настроек (`BOT_TOKEN`, `CHAT_ID`, `CHANNEL_ID`)
 - `config_runtime.py` — чтение настроек: env-переменные имеют приоритет над `config.py`
 - `whoami.py` — утилита: показывает `chat.id` чата/канала, где было сообщение
-- `DEPLOY.md` — бесплатный деплой (Render и др.) и про «засыпание» free-планов
-- `requirements.txt` — зависимости проекта (`python-telegram-bot`, `httpx`, `beautifulsoup4`, `playwright`); ставить через `pip install -r requirements.txt`
+- `requirements.txt` — зависимости проекта (`python-telegram-bot`, `httpx`, `beautifulsoup4`, `playwright`, `aiofiles`); ставить через `pip install -r requirements.txt`
 - `allowed_domains.json` — белый список доменов для парсинга
 
 ## Быстрый старт локально
@@ -81,13 +80,12 @@ Privacy Mode (`/setprivacy` → Disable) — иначе Telegram вообще н
 - [x] **WB парсинг** — название, картинка, цена (Playwright работает локально)
 - [ ] **Ozon парсинг** — структура готова, локально блокирует VPN IP (188.243.70.16). На чистом IP (Fly.io/сервер) будет работать
 - [x] **Yandex Market парсинг** — JSON-LD (Product schema): title, price (card), image, link
-- [x] **AliExpress парсинг** — базовый HTTP (og:tags), Playwright опционально для цен
+- [x] **AliExpress парсинг** — HTTP (og:tags / JSON-LD) работает частично; капча блокирует цены/название/картинку. Локальный логотип используется как фоллбек. В посту: 🛒 «Ссылка на товар: AliExpress» → кликабельная ссылка на товар. **Требуется комментарий** — без комментария бот не публикует пост и просит добавить его (защита от пустых постов).
 - [x] **Playwright интеграция** — headless Chromium для WB/Ozon (антибот обходится только браузером)
 - [x] **Сборка сообщения** — пост в канал: картинка + заголовок + цена + ссылка + автор тега
 - [x] **Комментарий к посту** — текст после ссылки попадает в пост как цитата (`<blockquote>`)
 - [ ] **Среднерыночная цена** — получение и отображение средней цены по маркетплейсам
-- [ ] **Dockerfile** — для деплоя на Render/Fly.io (Playwright нужен контейнер с Chromium)
+- [x] **keep_awake** — опционально, `KEEP_ALIVE_MIN=0` выключает (реализовано в `_post_init`)
 - [x] **Unit tests** — для `link_parser` и `extract_url` (GitHub Actions CI, запускаются автоматически при push/PR)
-- [ ] **keep_awake** — опционально, `KEEP_ALIVE_MIN=0` выключает
 
 Партнёрские API (WB/Ozon) — не нужны, доступов нет.

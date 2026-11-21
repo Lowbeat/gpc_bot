@@ -102,41 +102,42 @@ async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         user_name = "незнакомец"
 
     # Build caption with price and store link
-        domain = data.get("domain", "").lower()
-        store_names = {
-            "wildberries.ru": "Wildberries",
-            "ozon.ru": "Ozon",
-            "market.yandex.ru": "Яндекс Маркет",
-            "aliexpress.ru": "AliExpress",
-            "ali.click": "AliExpress",
-        }
-        store_logos = {
-            "aliexpress.ru": "https://cdn-icons-png.flaticon.com/512/5968/5968282.png",
-            "ali.click": "https://cdn-icons-png.flaticon.com/512/5968/5968282.png",
-        }
-        store_name = store_names.get(domain, domain)
-        store_logo = store_logos.get(domain)
+    domain = data.get("domain", "").lower()
+    store_names = {
+        "wildberries.ru": "Wildberries",
+        "ozon.ru": "Ozon",
+        "market.yandex.ru": "Яндекс Маркет",
+        "aliexpress.ru": "AliExpress",
+        "ali.click": "AliExpress",
+    }
+    store_logos = {
+        "aliexpress.ru": "D:/Projects/gpc_bot/Static content/1280px_Aliexpress_logo.svg.png",
+        "ali.click": "D:/Projects/gpc_bot/Static content/1280px_Aliexpress_logo.svg.png",
+    }
+    store_name = store_names.get(domain, domain)
+    store_logo = store_logos.get(domain)
 
-        # Price: from description (old) or price field (Playwright/API)
-        price_line = ""
+    # Price: from description (old) or price field (Playwright/API)
+    price_line = ""
+    # For AliExpress, always show 🛒 link with product URL, not plain text
+    if store_logo:
+        store_display = f'<a href="{safe_url}">🛒 Ссылка на товар: {store_name}</a>'
+    else:
         store_display = f'<a href="{safe_url}">{store_name}</a>'
-        if store_logo:
-            # Use emoji for AliExpress (Telegram doesn't support img tag in HTML)
-            store_display = f'<a href="{safe_url}">🛒 {store_name}</a>'
 
-        if data.get("price"):
-            price_val = data["price"]
-            # Parse "sale (regular)" format
-            if "(" in price_val and ")" in price_val:
-                sale_part = price_val.split("(")[0].strip()
-                regular_part = price_val.split("(")[1].split(")")[0].strip()
-                price_line = f"💰 Цена: {sale_part}₽ ({regular_part}₽)\n"
-            else:
-                price_line = f"💰 Цена: {price_val}₽\n"
-        elif data.get("description") and data["description"].startswith("Цена:"):
-            price_line = f"💰 {data['description']}\n"
+    if data.get("price"):
+        price_val = data["price"]
+        # Parse "sale (regular)" format
+        if "(" in price_val and ")" in price_val:
+            sale_part = price_val.split("(")[0].strip()
+            regular_part = price_val.split("(")[1].split(")")[0].strip()
+            price_line = f"💰 Цена: {sale_part}₽ ({regular_part}₽)\n"
         else:
-            price_line = ""
+            price_line = f"💰 Цена: {price_val}₽\n"
+    elif data.get("description") and data["description"].startswith("Цена:"):
+        price_line = f"💰 {data['description']}\n"
+    else:
+        price_line = ""
 
     # Comment from user (text after URL)
     comment_line = ""
@@ -144,11 +145,16 @@ async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         comment_line = f"\n\n<blockquote>{escape(comment)}</blockquote>"
 
     caption = f"<b>{escape(title)}</b>\n\n{price_line}{store_display}{comment_line}\n\n👤 <i>От {user_name}</i>"
+    log.debug("Caption for channel: %s", caption)
 
     image_bytes = None
-    if data.get("image"):
-        async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=httpx.Timeout(15.0)) as client:
-            image_bytes = await download_image(client, data["image"])
+    image_url = data.get("image")
+    # Fallback to store logo if no product image (e.g., AliExpress CAPTCHA)
+    if not image_url and store_logo:
+        image_url = store_logo
+    
+    if image_url:
+        image_bytes = await download_image(image_url)
 
     channel = config.resolve_channel(chat.id if chat else None)
     try:
@@ -198,9 +204,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = " ".join(text_parts)
     log.debug("handle_message: text=%r", text)
 
-    url = None
-    comment = None
-
+    # Extract all URLs from the message
+    urls = []
+    
     # For /post command, extract URL after the command
     if msg.text and msg.text.startswith("/post"):
         parts = msg.text.split(maxsplit=1)
@@ -208,41 +214,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             rest = parts[1].strip()
             url_match = extract_url(rest)
             if url_match:
-                url = url_match
-                url_end = rest.find(url) + len(url)
-                comment = rest[url_end:].strip()
-            log.debug("handle_message: /post command url=%r comment=%r", url, comment)
+                urls.append((url_match, rest[len(url_match):].strip()))
+            log.debug("handle_message: /post command urls=%r", urls)
 
-    # Try to extract URL and comment from entities first (most accurate)
+    # Try to extract URLs from entities first (most accurate)
     if msg.entities:
         for ent in msg.entities:
             if ent.type == "url" and msg.text and ent.offset is not None and ent.length is not None:
                 url = msg.text[ent.offset:ent.offset + ent.length]
                 comment = msg.text[ent.offset + ent.length:].strip()
-                log.debug("handle_message: entity url=%r comment=%r", url, comment)
-                break
+                # Avoid duplicate from /post command
+                if not any(u == url for u, _ in urls):
+                    urls.append((url, comment))
+                    log.debug("handle_message: entity url=%r comment=%r", url, comment)
 
     # Fallback: caption entities
-    if not url and msg.caption_entities:
+    if msg.caption_entities:
         for ent in msg.caption_entities:
             if ent.type == "url" and msg.caption and ent.offset is not None and ent.length is not None:
                 url = msg.caption[ent.offset:ent.offset + ent.length]
                 comment = msg.caption[ent.offset + ent.length:].strip()
-                log.debug("handle_message: caption entity url=%r comment=%r", url, comment)
-                break
+                if not any(u == url for u, _ in urls):
+                    urls.append((url, comment))
+                    log.debug("handle_message: caption entity url=%r comment=%r", url, comment)
 
-    # Fallback: extract_url from plain text (no comment extraction)
-    if not url:
-        url = extract_url(text)
-        log.debug("handle_message: extracted url=%r", url)
+    # Fallback: extract all URLs from plain text
+    if not urls:
+        # Find all URLs in text
+        import re
+        url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
+        for match in re.finditer(url_pattern, text):
+            urls.append((match.group(), ""))
 
-    # Fallback: plain text starts with http
-    if not url:
-        if msg.text and msg.text.strip().startswith(("http://", "https://")):
-            url = msg.text.strip()
-            log.debug("handle_message: fallback url=%r", url)
-
-    if not url:
+    if not urls:
         allowed = _load_allowed_domains()
         if allowed:
             domains_str = ", ".join(sorted(allowed))
@@ -255,7 +259,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await msg.reply_text("Я не нашёл ссылку 🙂 Пришли, например: https://example.com/article")
         return
 
-    await build_and_publish(update, context, url, comment)
+    # Process each URL and send individual results
+    for i, (url, comment) in enumerate(urls):
+        if len(urls) > 1:
+            # Show progress for multiple URLs
+            await msg.reply_text(f"🔗 Обрабатываю ссылку {i+1}/{len(urls)}...")
+        
+        # Check if AliExpress link without comment
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc.lower().replace("www.", "")
+        is_ali = domain in ("aliexpress.ru", "ali.click")
+        if is_ali and not comment:
+            await msg.reply_text(
+                "⚠️ AliExpress: бот пока не может автоматически получить данные товара (капча).\n"
+                "Пожалуйста, добавьте комментарий после ссылки (через пробел) — "
+                "он попадет в пост, и бот опубликует ссылку с вашим комментарием.\n"
+                "Пример:\n"
+                "<code>https://aliexpress.ru/item/123.html Отличная цена, заказываю</code>",
+                parse_mode=ParseMode.HTML,
+                reply_to_message_id=msg.message_id,
+            )
+            continue
+        
+        try:
+            await build_and_publish(update, context, url, comment)
+        except ConnectionError as e:
+            await msg.reply_text(f"❌ Ссылка {i+1}: {e}")
+        except Exception as e:
+            log.error("Error processing URL %s: %s", url, e)
+            await msg.reply_text(f"⚠️ Ссылка {i+1}: ошибка при обработке — {e}")
 
 
 def is_bot_mentioned(msg, bot_id: int = None) -> bool:
@@ -315,7 +347,8 @@ async def group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if msg.from_user and msg.from_user.id == context.bot.id:
         return
     # Ignore messages forwarded from our own channel (bot's own posts in discussion group)
-    if getattr(msg, "forward_from_chat", None) and msg.forward_from_chat.id == config.CHANNEL_ID:
+    fwd = getattr(msg, "forward_from_chat", None)
+    if fwd and fwd.id == config.CHANNEL_ID:
         return
     log.debug("group_handler: chat_id=%s text=%r entities=%s",
               msg.chat_id, msg.text, msg.entities)
@@ -344,15 +377,29 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     log.error("Exception while handling an update:", exc_info=context.error)
 
 
+# Global reference to keep_awake task for proper shutdown
+_keep_awake_task = None
+
 async def _post_init(application) -> None:
-    global BOT_USERNAME
+    global BOT_USERNAME, _keep_awake_task
     me = await application.bot.get_me()
     BOT_USERNAME = me.username
     log.info("Бот запущен как @%s", BOT_USERNAME)
 
     # Start keep_awake task properly (avoid PTB warning)
     if int(os.environ.get("KEEP_ALIVE_MIN", "10")) > 0:
-        asyncio.create_task(keep_awake())
+        _keep_awake_task = asyncio.create_task(keep_awake())
+
+
+async def _post_shutdown(application) -> None:
+    global _keep_awake_task
+    if _keep_awake_task and not _keep_awake_task.done():
+        _keep_awake_task.cancel()
+        try:
+            await _keep_awake_task
+        except asyncio.CancelledError:
+            pass
+        log.debug("keep_awake task cancelled on shutdown")
 
 
 def main() -> None:
@@ -375,6 +422,7 @@ def main() -> None:
         .get_updates_read_timeout(30.0)
         .get_updates_write_timeout(30.0)
         .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
         .build()
     )
     log.info("Бот стартует. чат=%s канал=%s", config.CHAT_ID, config.CHANNEL_ID)

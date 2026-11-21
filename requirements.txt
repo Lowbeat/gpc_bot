@@ -4,3 +4,4 @@ beautifulsoup4
 playwright
 pytest
 pytest-asyncio
+aiofiles
