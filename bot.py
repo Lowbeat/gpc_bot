@@ -147,10 +147,6 @@ async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     caption = f"<b>{escape(title)}</b>\n\n{price_line}{store_display}{comment_line}\n\n👤 <i>От {user_name}</i>"
     log.debug("Caption for channel: %s", caption)
 
-    # Check if AliExpress product data was actually parsed
-    is_ali = domain in ("aliexpress.ru", "ali.click")
-    ali_parsed = is_ali and data.get("title") and data.get("price") and data.get("image")
-    
     image_bytes = None
     image_url = data.get("image")
     # Fallback to store logo if no product image (e.g., AliExpress CAPTCHA)
@@ -185,19 +181,11 @@ async def build_and_publish(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         )
         return
 
-    # If AliExpress product couldn't be parsed, notify user
-    if is_ali and not ali_parsed:
-        await msg.reply_text(
-            "⚠️ AliExpress: не удалось получить данные товара (защита от ботов).\n"
-            "В канал отправлено только название магазина и ссылка.",
-            reply_to_message_id=msg.message_id,
-        )
-    else:
-        username = config.channel_username(chat.id if chat else None)
-        ok_text = "✅ Опубликовано в канале!"
-        if username:
-            ok_text += f"\nhttps://t.me/{username}/{sent.message_id}"
-        await msg.reply_text(ok_text, reply_to_message_id=msg.message_id)
+    username = config.channel_username(chat.id if chat else None)
+    ok_text = "✅ Опубликовано в канале!"
+    if username:
+        ok_text += f"\nhttps://t.me/{username}/{sent.message_id}"
+    await msg.reply_text(ok_text, reply_to_message_id=msg.message_id)
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -235,8 +223,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if ent.type == "url" and msg.text and ent.offset is not None and ent.length is not None:
                 url = msg.text[ent.offset:ent.offset + ent.length]
                 comment = msg.text[ent.offset + ent.length:].strip()
-                urls.append((url, comment))
-                log.debug("handle_message: entity url=%r comment=%r", url, comment)
+                # Avoid duplicate from /post command
+                if not any(u == url for u, _ in urls):
+                    urls.append((url, comment))
+                    log.debug("handle_message: entity url=%r comment=%r", url, comment)
 
     # Fallback: caption entities
     if msg.caption_entities:
@@ -244,8 +234,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if ent.type == "url" and msg.caption and ent.offset is not None and ent.length is not None:
                 url = msg.caption[ent.offset:ent.offset + ent.length]
                 comment = msg.caption[ent.offset + ent.length:].strip()
-                urls.append((url, comment))
-                log.debug("handle_message: caption entity url=%r comment=%r", url, comment)
+                if not any(u == url for u, _ in urls):
+                    urls.append((url, comment))
+                    log.debug("handle_message: caption entity url=%r comment=%r", url, comment)
 
     # Fallback: extract all URLs from plain text
     if not urls:
@@ -273,6 +264,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if len(urls) > 1:
             # Show progress for multiple URLs
             await msg.reply_text(f"🔗 Обрабатываю ссылку {i+1}/{len(urls)}...")
+        
+        # Check if AliExpress link without comment
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc.lower().replace("www.", "")
+        is_ali = domain in ("aliexpress.ru", "ali.click")
+        if is_ali and not comment:
+            await msg.reply_text(
+                "⚠️ AliExpress: бот пока не может автоматически получить данные товара (капча).\n"
+                "Пожалуйста, добавьте комментарий после ссылки (через пробел) — "
+                "он попадет в пост, и бот опубликует ссылку с вашим комментарием.\n"
+                "Пример:\n"
+                "<code>https://aliexpress.ru/item/123.html Отличная цена, заказываю</code>",
+                parse_mode=ParseMode.HTML,
+                reply_to_message_id=msg.message_id,
+            )
+            continue
         
         try:
             await build_and_publish(update, context, url, comment)
