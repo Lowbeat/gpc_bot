@@ -51,11 +51,13 @@ https://www.ozon.ru/product/67890/
 ```
 
 **В личке (тегать не нужно):**
-```
-https://aliexpress.ru/item/1005013068124123.html
-```
-```
+```bash
 https://www.wildberries.ru/catalog/12345/detail.aspx Отличная вещь, беру!
+```
+
+**AliExpress (требует комментарий из-за капчи):**
+```bash
+https://aliexpress.ru/item/1005013068124123.html Цена отличная, заказываю
 ```
 
 **С комментарием (работает везде):**
