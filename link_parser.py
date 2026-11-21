@@ -231,6 +231,7 @@ async def fetch_page(url: str) -> dict:
                     result["image"] = wb_data["image"]
                 result["domain"] = domain
                 return result
+
         # Fallback to Playwright
         log.debug("WB API failed, trying Playwright for %s", url)
         pw_result = await _parse_wb_playwright(url)
@@ -239,6 +240,8 @@ async def fetch_page(url: str) -> dict:
             if pw_result.get("price"):
                 pw_result["description"] = f"Цена: {pw_result['price']} ₽"
             return pw_result
+        # Playwright ran but failed (likely challenge/antibot) - don't fall back to HTTP
+        raise ConnectionError("Wildberries: защита от ботов (challenge/antibot). Нужен residential IP или официальный API.")
 
     # Ozon: try Playwright first (HTTP will 403)
     if "ozon.ru" in domain:
@@ -370,7 +373,7 @@ async def download_image(image_url: str, max_bytes: int = 5_000_000) -> bytes | 
 
 # --- Playwright parsing (for anti-bot sites: WB, Ozon) ---
 
-async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wait_timeout: int = 90000) -> str | None:
+async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wait_timeout: int = 15000, extra_wait: bool = False) -> str | None:
     """Загружает страницу через Playwright (Chromium), возвращает HTML."""
     try:
         from playwright.async_api import async_playwright
@@ -380,9 +383,8 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
 
     try:
         async with async_playwright() as p:
-            # headless=False — visible browser for testing
             browser = await p.chromium.launch(
-                headless=False,
+                headless=True,
                 args=[
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
@@ -403,14 +405,26 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
             page = await context.new_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=wait_timeout)
 
+            # Early check for challenge/antibot page - fail fast
+            html_check = await page.content()
+            if ("antibot" in html_check.lower() or "challenge" in html_check.lower() or 
+                "капча" in html_check.lower() or "captcha" in html_check.lower() or
+                "подозритель" in html_check.lower() or "блокиров" in html_check.lower()):
+                log.debug("Challenge/antibot page detected early, failing fast")
+                await browser.close()
+                return None
+
             if wait_selector:
                 try:
                     await page.wait_for_selector(wait_selector, timeout=wait_timeout)
                 except Exception:
                     pass
-
-            # Longer wait for AliExpress and other anti-bot sites
-            await page.wait_for_timeout(20000)
+            elif extra_wait:
+                # Fallback: wait for network to settle
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
 
             html_content = await page.content()
             print(f"DEBUG: Got HTML length: {len(html_content)}")
@@ -425,10 +439,11 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
 
 async def _parse_wb_playwright(url: str) -> dict | None:
     """Парсит WB через Playwright (обходит 403/498)."""
+    # Wait for price elements to appear (wallet price or regular price)
     html_content = await _fetch_with_playwright(
         url,
-        wait_selector=None,
-        wait_timeout=90000
+        wait_selector="span[class*='productLinePriceWallet'], span[class*='productLinePriceNow'], [data-auto='price']",
+        wait_timeout=15000
     )
     if not html_content:
         return None
