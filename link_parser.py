@@ -8,6 +8,7 @@ import socket
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+import aiofiles
 import httpx
 from bs4 import BeautifulSoup
 
@@ -239,13 +240,15 @@ async def fetch_page(url: str) -> dict:
                 pw_result["description"] = f"Цена: {pw_result['price']} ₽"
             return pw_result
 
-    # Ozon: try HTTP first, then Playwright
+    # Ozon: try Playwright first (HTTP will 403)
     if "ozon.ru" in domain:
         log.debug("Trying Playwright for Ozon: %s", url)
         pw_result = await _parse_ozon_playwright(url)
         if pw_result and pw_result.get("title"):
             pw_result["description"] = f"Цена: {pw_result['price']} ₽" if pw_result.get("price") else None
             return pw_result
+        # Playwright ran but failed (likely VPN/challenge) - don't fall back to HTTP
+        raise ConnectionError("Ozon: VPN/защита от ботов. Нужен residential IP или официальный API.")
 
     # AliExpress: basic HTTP (og:tags) — skip Playwright due to captcha
     if "aliexpress.ru" in domain or "ali.click" in domain:
@@ -339,9 +342,18 @@ def extract_url(text: str) -> str | None:
     return url
 
 
-async def download_image(client: httpx.AsyncClient, image_url: str, max_bytes: int = 5_000_000) -> bytes | None:
-    """Скачивает картинку, возвращает bytes или None."""
+async def download_image(image_url: str, max_bytes: int = 5_000_000) -> bytes | None:
+    """Скачивает картинку или читает локальный файл, возвращает bytes или None."""
     try:
+        # Check if it's a local file path
+        if image_url.startswith(("D:/", "C:/", "/")) and not image_url.startswith("http"):
+            path = Path(image_url)
+            if path.exists() and path.is_file():
+                async with aiofiles.open(path, "rb") as f:
+                    data = await f.read(max_bytes)
+                    return data if data else None
+        
+        # Otherwise download via HTTP
         async with httpx.AsyncClient(
             headers=HEADERS, follow_redirects=True, timeout=httpx.Timeout(15.0)
         ) as c:
@@ -504,6 +516,13 @@ async def _parse_wb_playwright(url: str) -> dict | None:
                     image = _abs(src, url)
                     break
 
+    # Fix WB thumbnail URL to get full-size image
+        # WB uses /c246x328/ in path for thumbnails, replace with /orig/
+        # Don't replace /big/ as it may be the best available for some products
+        if image:
+            import re
+            image = re.sub(r'/c\d+x\d+/', '/orig/', image)
+
     return {"title": title, "price": price, "image": image, "link": url, "domain": "wildberries.ru"}
 
 
@@ -512,7 +531,7 @@ async def _parse_ozon_playwright(url: str) -> dict | None:
     html_content = await _fetch_with_playwright(
         url,
         wait_selector="h1[data-auto='product-title'], h1[class*='heading'], h1",
-        wait_timeout=90000
+        wait_timeout=15000
     )
     if not html_content:
         return None
@@ -520,7 +539,8 @@ async def _parse_ozon_playwright(url: str) -> dict | None:
     soup = BeautifulSoup(html_content, "html.parser")
 
     # Check for VPN/challenge page
-    if "выключите vpn" in html_content.lower() or "подозритель" in html_content.lower() or "captcha" in html_content.lower():
+    if ("выключите vpn" in html_content.lower() or "подозритель" in html_content.lower() 
+        or "captcha" in html_content.lower() or "похоже, нет соединения" in html_content.lower()):
         log.debug("Ozon challenge/VPN block detected")
         return None
 
