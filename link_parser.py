@@ -405,20 +405,19 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
             page = await context.new_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=wait_timeout)
 
-            # Early check for challenge/antibot page - fail fast
-            html_check = await page.content()
-            if ("antibot" in html_check.lower() or "challenge" in html_check.lower() or 
-                "капча" in html_check.lower() or "captcha" in html_check.lower() or
-                "подозритель" in html_check.lower() or "блокиров" in html_check.lower()):
-                log.debug("Challenge/antibot page detected early, failing fast")
-                await browser.close()
-                return None
-
             if wait_selector:
                 try:
                     await page.wait_for_selector(wait_selector, timeout=wait_timeout)
+                    # Verify selector actually matches something
+                    element = await page.query_selector(wait_selector)
+                    if not element:
+                        log.debug("Wait selector %s timed out or not found", wait_selector)
+                        await browser.close()
+                        return None
                 except Exception:
-                    pass
+                    log.debug("Wait selector %s failed", wait_selector)
+                    await browser.close()
+                    return None
             elif extra_wait:
                 # Fallback: wait for network to settle
                 try:
@@ -435,7 +434,6 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
         import traceback
         traceback.print_exc()
         return None
-
 
 async def _parse_wb_playwright(url: str) -> dict | None:
     """Парсит WB через Playwright (обходит 403/498)."""
