@@ -693,23 +693,45 @@ async def _parse_ozon_cdp(url: str) -> dict | None:
                     except Exception:
                         pass
 
-            # Price from webPrice
-            price = None
+            # Price from webPrice (and variants like webPriceDecreasedCompact)
             card_price = None
             regular_price = None
             original_price = None
+            # Collect all webPrice widgets, prefer the one with actual price data
+            webprice_widgets = []
             for key, value in widget_states.items():
                 if key.startswith("webPrice"):
                     try:
                         data = json.loads(value)
-                        card_price = data.get("cardPrice")
-                        regular_price = data.get("price")
-                        original_price = data.get("originalPrice")
-                        break
+                        webprice_widgets.append((key, data))
                     except Exception:
                         pass
 
-            # Format price: "cardPrice (regularPrice)" or "regularPrice (originalPrice)"
+            # First, try to find a widget with actual numeric prices
+            numeric_price_widget = None
+            for key, data in webprice_widgets:
+                card_price = data.get("cardPrice")
+                regular_price = data.get("price")
+                original_price = data.get("originalPrice")
+                # Check if this widget has actual numeric prices
+                has_numeric_price = any(v for v in [card_price, regular_price, original_price] if v and any(c.isdigit() for c in str(v)))
+                if has_numeric_price:
+                    numeric_price_widget = (key, data, card_price, regular_price, original_price)
+                    break
+
+            # If no widget with numeric prices, fall back to first widget (might have textRs only)
+            if numeric_price_widget is None and webprice_widgets:
+                key, data = webprice_widgets[0]
+                card_price = data.get("cardPrice")
+                regular_price = data.get("price")
+                original_price = data.get("originalPrice")
+                text_rs = data.get("textRs", [])
+                if card_price is None and text_rs and isinstance(text_rs, list):
+                    card_price = text_rs[0].get("content")
+            else:
+                key, data, card_price, regular_price, original_price = numeric_price_widget
+
+            # Format price: "cardPrice (regularPrice)" like WB
             price_parts = []
             if card_price:
                 card_clean = re.sub(r"[^\d]", "", card_price)
@@ -717,23 +739,47 @@ async def _parse_ozon_cdp(url: str) -> dict | None:
             if regular_price and regular_price != card_price:
                 reg_clean = re.sub(r"[^\d]", "", regular_price)
                 price_parts.append(reg_clean)
+            # Skip original_price unless it's different from regular
             if original_price and original_price != regular_price:
                 orig_clean = re.sub(r"[^\d]", "", original_price)
                 price_parts.append(orig_clean)
-            price = " (".join(price_parts) + ")" * (len(price_parts) - 1) if price_parts else None
+            if len(price_parts) >= 2:
+                price = f"{price_parts[0]} ({price_parts[1]})"
+            elif len(price_parts) == 1:
+                price = price_parts[0]
+            else:
+                price = None
 
-            # Image from webStickyProducts or webPdpGrid
+            # Image from webGallery (higher quality) or webStickyProducts/webPdpGrid
             image = None
             for key, value in widget_states.items():
-                if key.startswith("webStickyProducts") or key.startswith("webPdpGrid"):
+                if key.startswith("webGallery"):
                     try:
                         data = json.loads(value)
-                        img_url = data.get("coverImageUrl") or data.get("imageUrl") or data.get("image")
-                        if img_url and img_url.startswith("http"):
-                            image = img_url
-                            break
+                        # Get first image from gallery (highest quality)
+                        images = data.get("images", [])
+                        if images:
+                            img_url = images[0].get("src") or images[0].get("imageUrl") or images[0].get("url")
+                            if img_url and img_url.startswith("http"):
+                                # Remove size constraints like /c50/ for higher quality (like WB /orig/)
+                                image = re.sub(r"/c\d+/", "/", img_url)
+                                break
                     except Exception:
                         pass
+
+            # Fallback to webStickyProducts or webPdpGrid
+            if not image:
+                for key, value in widget_states.items():
+                    if key.startswith("webStickyProducts") or key.startswith("webPdpGrid"):
+                        try:
+                            data = json.loads(value)
+                            img_url = data.get("coverImageUrl") or data.get("imageUrl") or data.get("image")
+                            if img_url and img_url.startswith("http"):
+                                # Remove size constraints
+                                image = re.sub(r"/c\d+/", "/", img_url)
+                                break
+                        except Exception:
+                            pass
 
             # Fallback to og:image
             if not image:
