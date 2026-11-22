@@ -100,3 +100,8 @@ Ozon блокирует обычные HTTP-запросы (403/antibot). Бот
 - [x] **Unit tests** — для `link_parser` и `extract_url` (GitHub Actions CI, запускаются автоматически при push/PR)
 
 Партнёрские API (WB/Ozon) — не нужны, доступов нет.
+
+---
+
+## Деплой на Home Assistant OS (Raspberry Pi)
+См. отдельный файл: [DEPLOY_HAOS.md](DEPLOY_HAOS.md)

@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  gpc_bot:
+    build: .
+    container_name: gpc_bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - CHAT_ID=${CHAT_ID}
+      - CHANNEL_ID=${CHANNEL_ID}
+      - KEEP_ALIVE_MIN=${KEEP_ALIVE_MIN:-10}
