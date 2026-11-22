@@ -1,10 +1,10 @@
 version: "3.8"
 
 services:
-  bot:
+  gpc_bot:
     build: .
     container_name: gpc_bot
-    restart: on-failure
+    restart: unless-stopped
     stop_grace_period: 60s
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
