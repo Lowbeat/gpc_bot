@@ -195,6 +195,33 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+async def info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "ℹ️ <b>Как пользоваться ботом</b>\n\n"
+        "Бот публикует посты в канал <b>только когда его тегнут</b>.\n\n"
+        "📋 <b>Способы передать ссылку:</b>\n"
+        "1️⃣ <b>Тег в группе/чате</b>: <code>@bot_username https://...</code>\n"
+        "2️⃣ <b>Реплай на сообщение бота</b> со ссылкой — тоже считается тегом\n"
+        "3️⃣ <b>В личке (DM)</b>: тегать не нужно — просто пришли ссылку\n"
+        "4️⃣ <b>Команда /post</b> в чате/группе: <code>/post https://...</code>\n"
+        "5️⃣ <b>Комментарий к посту</b>: текст после ссылки (через пробел) → попадёт в пост как цитата\n\n"
+        "🛒 <b>Поддерживаемые маркетплейсы:</b>\n"
+        "• 🟣 <b>Wildberries</b> — название, фото, цена (по карте / обычная)\n"
+        "• 🔵 <b>Ozon</b> — название, фото высокого качества, цена (Ozon Карта / обычная)\n"
+        "• 🔴 <b>Яндекс Маркет</b> — название, фото, цена (по карте)\n"
+        "• 🟠 <b>AliExpress</b> — <b>требует комментарий</b> (капча блокирует автопарсинг)\n\n"
+        "⚠️ <b>Важно для AliExpress:</b> добавьте комментарий после ссылки, иначе бот не опубликует пост.\n\n"
+        "📝 <b>Примеры:</b>\n"
+        "<code>@bot https://www.wildberries.ru/catalog/12345/detail.aspx</code>\n"
+        "<code>https://www.ozon.ru/product/67890/ Супер цена!</code>\n"
+        "<code>/post https://market.yandex.ru/product--12345</code>\n"
+        "<code>https://aliexpress.ru/item/123.html Беру, цена огонь</code>\n\n"
+        "🔧 <b>Настройка для групп:</b> у бота должен быть выключен Privacy Mode "
+        "(<code>/setprivacy</code> → Disable у @BotFather), иначе теги не доходят."
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
     if not msg:
@@ -428,6 +455,7 @@ def main() -> None:
     log.info("Бот стартует. чат=%s канал=%s", config.CHAT_ID, config.CHANNEL_ID)
 
     app.add_handler(CommandHandler("start", start_handler))
+    app.add_handler(CommandHandler("info", info_handler))
     app.add_handler(CommandHandler("post", handle_message))
 
     app.add_handler(
