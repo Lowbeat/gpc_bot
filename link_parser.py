@@ -411,9 +411,15 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
                     await page.wait_for_selector(wait_selector, timeout=wait_timeout)
                 except Exception:
                     pass
+            else:
+                # Try to wait for network to settle, but don't block forever
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
 
-            # Longer wait for AliExpress and other anti-bot sites
-            await page.wait_for_timeout(20000)
+            # Small buffer for final rendering
+            await page.wait_for_timeout(2000)
 
             html_content = await page.content()
             print(f"DEBUG: Got HTML length: {len(html_content)}")
@@ -427,10 +433,11 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
 
 async def _parse_wb_playwright(url: str) -> dict | None:
     """Парсит WB через Playwright (обходит 403/498)."""
+    # Wait for price elements to appear (wallet price or regular price)
     html_content = await _fetch_with_playwright(
         url,
-        wait_selector=None,
-        wait_timeout=90000
+        wait_selector="span[class*='productLinePriceWallet'], span[class*='productLinePriceNow'], [data-auto='price']",
+        wait_timeout=15000
     )
     if not html_content:
         return None
