@@ -243,20 +243,15 @@ async def fetch_page(url: str) -> dict:
         # Playwright ran but failed (likely challenge/antibot) - don't fall back to HTTP
         raise ConnectionError("Wildberries: защита от ботов (challenge/antibot). Нужен residential IP или официальный API.")
 
-    # Ozon: try CDP + internal API first (works on clean IP without proxy)
+    # Ozon: try CDP + internal API only (works on clean IP without proxy)
     if "ozon.ru" in domain:
         log.debug("Trying CDP + internal API for Ozon: %s", url)
+        # Pass URL directly to CDP - it handles short URLs by navigating in browser
         cdp_result = await _parse_ozon_cdp(url)
         if cdp_result and cdp_result.get("title"):
             cdp_result["description"] = f"Цена: {cdp_result['price']} ₽" if cdp_result.get("price") else None
             return cdp_result
-        # CDP failed, fallback to Playwright (may work with different IP)
-        log.debug("CDP failed, trying Playwright for Ozon: %s", url)
-        pw_result = await _parse_ozon_playwright(url)
-        if pw_result and pw_result.get("title"):
-            pw_result["description"] = f"Цена: {pw_result['price']} ₽" if pw_result.get("price") else None
-            return pw_result
-        # Both failed - don't fall back to HTTP
+        # CDP failed - no Playwright fallback for Ozon (only Edge CDP works)
         raise ConnectionError("Ozon: VPN/защита от ботов. Нужен residential IP или официальный API.")
 
     # AliExpress: basic HTTP (og:tags) — skip Playwright due to captcha
@@ -645,23 +640,77 @@ async def _parse_ozon_cdp(url: str) -> dict | None:
 
             # Go to main page to establish session
             await page.goto("https://www.ozon.ru", wait_until="domcontentloaded", timeout=30000)
+            # Wait for challenge to pass (like Ozon article suggests: 2-3 sec, but give more time)
+            for i in range(40):
+                title = await page.title()
+                if "Captcha" in title:
+                    print(f"DEBUG: Captcha detected at attempt {i+1}")
+                    break
+                if "нет соединения" in title:
+                    print(f"DEBUG: Challenge page at attempt {i+1}")
+                    break
+                ready = await page.evaluate("document.querySelectorAll('[id^=\"state-\"]').length")
+                if ready and "Antibot" not in title:
+                    print(f"DEBUG: Challenge passed at attempt {i+1}")
+                    break
+                await page.wait_for_timeout(1000)
+            else:
+                print("DEBUG: Challenge timeout")
+
             await page.wait_for_timeout(3000)
 
-            # Extract product ID from URL
+            # Extract product ID from URL (handle short URLs by navigating in browser)
             import re
-            m = re.search(r"/product/.*?[-_]?(\d+)/?", url)
-            product_id = m.group(1) if m else None
+            product_id = None
+            final_url = url
+            
+            # First try to extract from full product URL - match product ID at end of path
+            # Pattern: /product/...-<id>/ or /product/...-<id>? or /product/<id>/
+            m = re.search(r"/product/.*[-_](\d+)(?:/|\?)", final_url)
+            if m:
+                product_id = m.group(1)
+            else:
+                # Fallback: try to find any numeric ID at end of path
+                m = re.search(r"/(\d+)(?:/|\?)", final_url)
+                if m:
+                    product_id = m.group(1)
+            
+            # If no product_id found and it's a short URL (ozon.ru/t/...), navigate in browser
+            if not product_id and "/t/" in url:
+                log.debug("Navigating to short URL in browser to resolve: %s", url)
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                # Wait for redirect to complete and challenge to pass on product page
+                for i in range(20):
+                    await page.wait_for_timeout(1000)
+                    title = await page.title()
+                    if "Captcha" in title or "нет соединения" in title:
+                        log.debug("Challenge on product page at attempt %d", i+1)
+                        continue
+                    break
+                await page.wait_for_timeout(3000)
+                final_url = page.url
+                log.debug("Resolved short URL in browser: %s -> %s", url, final_url)
+                # Extract product ID from resolved URL
+                m = re.search(r"/product/.*[-_](\d+)(?:/|\?)", final_url)
+                if m:
+                    product_id = m.group(1)
+                else:
+                    m = re.search(r"/(\d+)(?:/|\?)", final_url)
+                    if m:
+                        product_id = m.group(1)
+            
             if not product_id:
                 log.debug("Could not extract product ID from URL: %s", url)
                 await browser.close()
                 return None
 
-            # Call internal API
+            # Call internal API using the product ID (original format that worked)
             api_url = f"https://www.ozon.ru/api/composer-api.bx/page/json/v2?url=%2Fproduct%2F{product_id}%2F"
+            log.debug("Calling Ozon API: %s", api_url)
             fetch_js = '''
                 async ({url}) => {
                     const res = await fetch(url, {
-                        method: 'GET',
+            method: 'GET',
                         credentials: 'include',
                         headers: {'Accept': 'application/json', 'Content-Type': 'application/json'}
                     });
