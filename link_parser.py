@@ -231,6 +231,7 @@ async def fetch_page(url: str) -> dict:
                     result["image"] = wb_data["image"]
                 result["domain"] = domain
                 return result
+
         # Fallback to Playwright
         log.debug("WB API failed, trying Playwright for %s", url)
         pw_result = await _parse_wb_playwright(url)
@@ -239,6 +240,8 @@ async def fetch_page(url: str) -> dict:
             if pw_result.get("price"):
                 pw_result["description"] = f"Цена: {pw_result['price']} ₽"
             return pw_result
+        # Playwright ran but failed (likely challenge/antibot) - don't fall back to HTTP
+        raise ConnectionError("Wildberries: защита от ботов (challenge/antibot). Нужен residential IP или официальный API.")
 
     # Ozon: try Playwright first (HTTP will 403)
     if "ozon.ru" in domain:
@@ -408,9 +411,15 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
                     await page.wait_for_selector(wait_selector, timeout=wait_timeout)
                 except Exception:
                     pass
+            else:
+                # Try to wait for network to settle, but don't block forever
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
 
-            # Longer wait for AliExpress and other anti-bot sites
-            await page.wait_for_timeout(20000)
+            # Small buffer for final rendering
+            await page.wait_for_timeout(2000)
 
             html_content = await page.content()
             print(f"DEBUG: Got HTML length: {len(html_content)}")
@@ -422,13 +431,13 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
         traceback.print_exc()
         return None
 
-
 async def _parse_wb_playwright(url: str) -> dict | None:
     """Парсит WB через Playwright (обходит 403/498)."""
+    # Wait for price elements to appear (wallet price or regular price)
     html_content = await _fetch_with_playwright(
         url,
-        wait_selector=None,
-        wait_timeout=90000
+        wait_selector="span[class*='productLinePriceWallet'], span[class*='productLinePriceNow'], [data-auto='price']",
+        wait_timeout=15000
     )
     if not html_content:
         return None
@@ -524,7 +533,6 @@ async def _parse_wb_playwright(url: str) -> dict | None:
             image = re.sub(r'/c\d+x\d+/', '/orig/', image)
 
     return {"title": title, "price": price, "image": image, "link": url, "domain": "wildberries.ru"}
-
 
 async def _parse_ozon_playwright(url: str) -> dict | None:
     """Парсит Ozon через Playwright (обходит 403/anti-bot)."""
