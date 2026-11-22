@@ -1,12 +1,29 @@
-version: '3.8'
+version: "3.8"
 
 services:
   gpc_bot:
     build: .
     container_name: gpc_bot
     restart: unless-stopped
+    stop_grace_period: 60s
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - CHAT_ID=${CHAT_ID}
       - CHANNEL_ID=${CHANNEL_ID}
-      - KEEP_ALIVE_MIN=${KEEP_ALIVE_MIN:-10}
+      - KEEP_ALIVE_MIN=${KEEP_ALIVE_MIN:-0}
+      - PLAYWRIGHT_HEADLESS=true
+      - TZ=Europe/Moscow
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 3
+      replicas: 1
+    volumes:
+      - ./Static content:/app/Static content:ro
+    networks:
+      - bot_net
+
+networks:
+  bot_net:
+    driver: bridge
