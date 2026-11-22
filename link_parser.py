@@ -645,12 +645,45 @@ async def _parse_ozon_cdp(url: str) -> dict | None:
 
             # Go to main page to establish session
             await page.goto("https://www.ozon.ru", wait_until="domcontentloaded", timeout=30000)
+            # Wait for challenge to pass (like Ozon article suggests: 2-3 sec, but give more time)
+            for i in range(40):
+                title = await page.title()
+                if "Captcha" in title:
+                    print(f"DEBUG: Captcha detected at attempt {i+1}")
+                    break
+                if "нет соединения" in title:
+                    print(f"DEBUG: Challenge page at attempt {i+1}")
+                    break
+                ready = await page.evaluate("document.querySelectorAll('[id^=\"state-\"]').length")
+                if ready and "Antibot" not in title:
+                    print(f"DEBUG: Challenge passed at attempt {i+1}")
+                    break
+                await page.wait_for_timeout(1000)
+            else:
+                print("DEBUG: Challenge timeout")
+
             await page.wait_for_timeout(3000)
 
-            # Extract product ID from URL
+                        # Extract product ID from URL (handle both full and short URLs)
             import re
+            product_id = None
+            
+            # First try to extract from full product URL
             m = re.search(r"/product/.*?[-_]?(\d+)/?", url)
-            product_id = m.group(1) if m else None
+            if m:
+                product_id = m.group(1)
+            else:
+                # For short URLs (ozon.ru/t/...), follow redirect to get full URL
+                try:
+                    async with httpx.AsyncClient(headers=OZON_HEADERS, follow_redirects=True, timeout=15.0) as client:
+                        resp = await client.get(url)
+                        final_url = str(resp.url)
+                        m = re.search(r"/product/.*?[-_]?(\d+)/?", final_url)
+                        if m:
+                            product_id = m.group(1)
+                except Exception as e:
+                    log.debug("Failed to resolve short URL %s: %s", url, e)
+            
             if not product_id:
                 log.debug("Could not extract product ID from URL: %s", url)
                 await browser.close()
