@@ -3,6 +3,7 @@
 import html
 import json
 import logging
+import os
 import re
 import socket
 from pathlib import Path
@@ -383,11 +384,12 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
         return None
 
     try:
-        async with async_playwright() as p:
-            # headless=False — visible browser for testing
-            browser = await p.chromium.launch(
-                headless=False,
-                args=[
+            async with async_playwright() as p:
+                # headless: configurable via env PLAYWRIGHT_HEADLESS (default true for servers)
+                headless = os.environ.get("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
+                browser = await p.chromium.launch(
+                    headless=headless,
+                    args=[
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-blink-features=AutomationControlled",
