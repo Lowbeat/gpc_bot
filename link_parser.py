@@ -243,14 +243,20 @@ async def fetch_page(url: str) -> dict:
         # Playwright ran but failed (likely challenge/antibot) - don't fall back to HTTP
         raise ConnectionError("Wildberries: защита от ботов (challenge/antibot). Нужен residential IP или официальный API.")
 
-    # Ozon: try Playwright first (HTTP will 403)
+    # Ozon: try CDP + internal API first (works on clean IP without proxy)
     if "ozon.ru" in domain:
-        log.debug("Trying Playwright for Ozon: %s", url)
+        log.debug("Trying CDP + internal API for Ozon: %s", url)
+        cdp_result = await _parse_ozon_cdp(url)
+        if cdp_result and cdp_result.get("title"):
+            cdp_result["description"] = f"Цена: {cdp_result['price']} ₽" if cdp_result.get("price") else None
+            return cdp_result
+        # CDP failed, fallback to Playwright (may work with different IP)
+        log.debug("CDP failed, trying Playwright for Ozon: %s", url)
         pw_result = await _parse_ozon_playwright(url)
         if pw_result and pw_result.get("title"):
             pw_result["description"] = f"Цена: {pw_result['price']} ₽" if pw_result.get("price") else None
             return pw_result
-        # Playwright ran but failed (likely VPN/challenge) - don't fall back to HTTP
+        # Both failed - don't fall back to HTTP
         raise ConnectionError("Ozon: VPN/защита от ботов. Нужен residential IP или официальный API.")
 
     # AliExpress: basic HTTP (og:tags) — skip Playwright due to captcha
@@ -587,6 +593,165 @@ async def _parse_ozon_playwright(url: str) -> dict | None:
                     break
 
     return {"title": title, "price": price, "image": image, "link": url, "domain": "ozon.ru"}
+
+
+async def _parse_ozon_cdp(url: str) -> dict | None:
+    """Парсит Ozon через Edge CDP + внутренний API (обходит антибот)."""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        log.warning("Playwright not installed, skipping CDP fetch")
+        return None
+
+    # Find Edge
+    import os
+    import asyncio
+    edge_paths = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    edge_path = None
+    for p in edge_paths:
+        if os.path.exists(p):
+            edge_path = p
+            break
+    if not edge_path:
+        log.debug("Edge not found, skipping CDP fetch")
+        return None
+
+    import tempfile, socket, subprocess
+    def free_port():
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    cdp_port = free_port()
+    profile = tempfile.mkdtemp(prefix="ozon-edge-")
+    edge_proc = subprocess.Popen([
+        edge_path,
+        f"--remote-debugging-port={cdp_port}",
+        f"--user-data-dir={tempfile.mkdtemp(prefix='ozon-edge-')}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "about:blank",
+    ])
+
+    try:
+        await asyncio.sleep(3)
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp(f"http://127.0.0.1:{cdp_port}")
+            context = browser.contexts[0]
+            page = await context.new_page()
+
+            # Go to main page to establish session
+            await page.goto("https://www.ozon.ru", wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(3000)
+
+            # Extract product ID from URL
+            import re
+            m = re.search(r"/product/.*?[-_]?(\d+)/?", url)
+            product_id = m.group(1) if m else None
+            if not product_id:
+                log.debug("Could not extract product ID from URL: %s", url)
+                await browser.close()
+                return None
+
+            # Call internal API
+            api_url = f"https://www.ozon.ru/api/composer-api.bx/page/json/v2?url=%2Fproduct%2F{product_id}%2F"
+            fetch_js = '''
+                async ({url}) => {
+                    const res = await fetch(url, {
+                        method: 'GET',
+                        credentials: 'include',
+                        headers: {'Accept': 'application/json', 'Content-Type': 'application/json'}
+                    });
+                    let json = null;
+                    try { json = await res.json(); } catch (e) {}
+                    return {status: res.status, url: res.url, json};
+                }
+            '''
+            result = await page.evaluate(fetch_js, {"url": f"https://www.ozon.ru/api/composer-api.bx/page/json/v2?url=%2Fproduct%2F{product_id}%2F"})
+            
+            await browser.close()
+            
+            if result["status"] != 200 or not result["json"]:
+                log.debug("Ozon CDP API failed: status=%s", result["status"])
+                return None
+
+            # Parse widgetStates
+            widget_states = result["json"].get("widgetStates", {})
+            
+            # Title from webProductHeading
+            title = None
+            for key, value in widget_states.items():
+                if key.startswith("webProductHeading"):
+                    try:
+                        data = json.loads(value)
+                        title = data.get("title")
+                        if title:
+                            break
+                    except Exception:
+                        pass
+
+            # Price from webPrice
+            price = None
+            card_price = None
+            regular_price = None
+            original_price = None
+            for key, value in widget_states.items():
+                if key.startswith("webPrice"):
+                    try:
+                        data = json.loads(value)
+                        card_price = data.get("cardPrice")
+                        regular_price = data.get("price")
+                        original_price = data.get("originalPrice")
+                        break
+                    except Exception:
+                        pass
+
+            # Format price: "cardPrice (regularPrice)" or "regularPrice (originalPrice)"
+            price_parts = []
+            if card_price:
+                card_clean = re.sub(r"[^\d]", "", card_price)
+                price_parts.append(card_clean)
+            if regular_price and regular_price != card_price:
+                reg_clean = re.sub(r"[^\d]", "", regular_price)
+                price_parts.append(reg_clean)
+            if original_price and original_price != regular_price:
+                orig_clean = re.sub(r"[^\d]", "", original_price)
+                price_parts.append(orig_clean)
+            price = " (".join(price_parts) + ")" * (len(price_parts) - 1) if price_parts else None
+
+            # Image from webStickyProducts or webPdpGrid
+            image = None
+            for key, value in widget_states.items():
+                if key.startswith("webStickyProducts") or key.startswith("webPdpGrid"):
+                    try:
+                        data = json.loads(value)
+                        img_url = data.get("coverImageUrl") or data.get("imageUrl") or data.get("image")
+                        if img_url and img_url.startswith("http"):
+                            image = img_url
+                            break
+                    except Exception:
+                        pass
+
+            # Fallback to og:image
+            if not image:
+                # We'd need HTML for this, skip for now
+                pass
+
+            return {"title": title, "price": price, "image": image, "link": url, "domain": "ozon.ru"}
+
+    except Exception as e:
+        log.debug("Ozon CDP fetch failed for %s: %s", url, e)
+        import traceback
+        traceback.print_exc()
+        return None
+    finally:
+        try:
+            edge_proc.terminate()
+        except Exception:
+            pass
 
 
 async def _parse_aliexpress_playwright(url: str) -> dict | None:
