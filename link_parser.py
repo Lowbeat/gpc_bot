@@ -373,7 +373,7 @@ async def download_image(image_url: str, max_bytes: int = 5_000_000) -> bytes | 
 
 # --- Playwright parsing (for anti-bot sites: WB, Ozon) ---
 
-async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wait_timeout: int = 15000, extra_wait: bool = False) -> str | None:
+async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wait_timeout: int = 90000) -> str | None:
     """Загружает страницу через Playwright (Chromium), возвращает HTML."""
     try:
         from playwright.async_api import async_playwright
@@ -383,8 +383,9 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
 
     try:
         async with async_playwright() as p:
+            # headless=False — visible browser for testing
             browser = await p.chromium.launch(
-                headless=True,
+                headless=False,
                 args=[
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
@@ -408,22 +409,11 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
             if wait_selector:
                 try:
                     await page.wait_for_selector(wait_selector, timeout=wait_timeout)
-                    # Verify selector actually matches something
-                    element = await page.query_selector(wait_selector)
-                    if not element:
-                        log.debug("Wait selector %s timed out or not found", wait_selector)
-                        await browser.close()
-                        return None
-                except Exception:
-                    log.debug("Wait selector %s failed", wait_selector)
-                    await browser.close()
-                    return None
-            elif extra_wait:
-                # Fallback: wait for network to settle
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=5000)
                 except Exception:
                     pass
+
+            # Longer wait for AliExpress and other anti-bot sites
+            await page.wait_for_timeout(20000)
 
             html_content = await page.content()
             print(f"DEBUG: Got HTML length: {len(html_content)}")
@@ -437,11 +427,10 @@ async def _fetch_with_playwright(url: str, wait_selector: str | None = None, wai
 
 async def _parse_wb_playwright(url: str) -> dict | None:
     """Парсит WB через Playwright (обходит 403/498)."""
-    # Wait for price elements to appear (wallet price or regular price)
     html_content = await _fetch_with_playwright(
         url,
-        wait_selector="span[class*='productLinePriceWallet'], span[class*='productLinePriceNow'], [data-auto='price']",
-        wait_timeout=15000
+        wait_selector=None,
+        wait_timeout=90000
     )
     if not html_content:
         return None
@@ -537,7 +526,6 @@ async def _parse_wb_playwright(url: str) -> dict | None:
             image = re.sub(r'/c\d+x\d+/', '/orig/', image)
 
     return {"title": title, "price": price, "image": image, "link": url, "domain": "wildberries.ru"}
-
 
 async def _parse_ozon_playwright(url: str) -> dict | None:
     """Парсит Ozon через Playwright (обходит 403/anti-bot)."""
