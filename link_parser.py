@@ -938,52 +938,64 @@ async def _parse_wb_linux_cdp(url: str) -> dict | None:
 
             page = await context.new_page()
 
-            # Go to WB main page to establish session
-            await page.goto("https://www.wildberries.ru", wait_until="domcontentloaded", timeout=30000)
+            # Go directly to product page - challenge happens there anyway
+            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
             
-            # Wait for challenge to pass (WB challenge usually passes faster)
-            for i in range(30):
-                title = await page.title()
-                if "Доступ ограничен" in title or "Доступ запрещен" in title:
-                    print(f"DEBUG WB: Challenge/block at attempt {i+1}")
-                else:
-                    # Check if we're past the challenge
-                    try:
-                        ready = await page.evaluate('document.querySelectorAll("[class*=\"productLinePriceWallet\"], [class*=\"productLinePriceNow\"], [data-auto=\"price\"]").length')
-                        if ready:
-                            print(f"DEBUG WB: Challenge passed at attempt {i+1}")
-                            break
-                    except Exception:
-                        pass
-                await page.wait_for_timeout(1000)
-            else:
-                print("DEBUG WB: Challenge timeout")
-
-            await page.wait_for_timeout(2000)
-
-            # Now navigate to the actual product page
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            
-            # Wait for product elements to load
+            # First, wait for challenge to pass (up to 30s)
+            # Check for actual challenge PAGE (title/overlay), not just scripts in DOM
+            challenge_passed = False
             for i in range(30):
                 try:
-                    price_el = await page.query_selector('span[class*="productLinePriceWallet"], span[class*="productLinePriceNow"], [data-auto="price"]')
-                    if price_el:
-                        print(f"DEBUG WB: Product elements found at attempt {i+1}")
+                    title = await page.title()
+                    
+                    # Check for challenge interstitial page indicators
+                    challenge_page = False
+                    if "Доступ ограничен" in title or "Доступ запрещен" in title or "Challenge" in title:
+                        challenge_page = True
+                    else:
+                        # Check for visible challenge overlay/iframe
+                        try:
+                            overlay = await page.query_selector('[class*="challenge-overlay"], [class*="antibot-overlay"], iframe[src*="antibot"], iframe[src*="challenge"]')
+                            if overlay:
+                                is_visible = await overlay.is_visible()
+                                if is_visible:
+                                    challenge_page = True
+                        except Exception:
+                            pass
+                    
+                    if challenge_page:
+                        print(f"DEBUG WB: Challenge page at attempt {i+1}")
+                    else:
+                        print(f"DEBUG WB: Challenge passed at attempt {i+1}")
+                        challenge_passed = True
+                        break
+                        
+                    await page.wait_for_timeout(1000)
+                except Exception:
+                    await page.wait_for_timeout(1000)
+            else:
+                print("DEBUG WB: Challenge timeout, continuing anyway")
+                challenge_passed = True  # Continue anyway
+
+            # Then wait for product elements (up to 5s - data usually ready after challenge)
+            for i in range(5):
+                try:
+                    ready = await page.evaluate('document.querySelectorAll("[class*=\"productLinePriceWallet\"], [class*=\"productLinePriceNow\"], [data-auto=\"price\"], [data-testid=\"product-price-wallet\"], [data-testid=\"product-price-final\"]").length')
+                    if ready:
+                        print(f"DEBUG WB: Product elements ready at attempt {i+1}")
                         break
                 except Exception:
                     pass
                 await page.wait_for_timeout(1000)
             else:
-                print("DEBUG WB: Product elements timeout")
+                print("DEBUG WB: Product elements timeout, continuing anyway")
 
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(500)
 
             html_content = await page.content()
             print(f"DEBUG WB: Got HTML length: {len(html_content)}")
             await browser.close()
 
-            # Parse with BeautifulSoup (same logic as _parse_wb_playwright)
             return _parse_wb_html(html_content, url)
 
         except Exception as e:
@@ -1037,51 +1049,64 @@ async def _parse_wb_windows_cdp(url: str) -> dict | None:
             context = browser.contexts[0]
             page = await context.new_page()
 
-            # Go to WB main page to establish session
-            await page.goto("https://www.wildberries.ru", wait_until="domcontentloaded", timeout=30000)
+            # Go directly to product page - challenge happens there anyway
+            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
             
-            # Wait for challenge to pass
-            for i in range(30):
-                title = await page.title()
-                if "Доступ ограничен" in title or "Доступ запрещен" in title:
-                    print(f"DEBUG WB: Challenge/block at attempt {i+1}")
-                else:
-                    try:
-                        ready = await page.evaluate('document.querySelectorAll("[class*=\"productLinePriceWallet\"], [class*=\"productLinePriceNow\"], [data-auto=\"price\"]").length')
-                        if ready:
-                            print(f"DEBUG WB: Challenge passed at attempt {i+1}")
-                            break
-                    except Exception:
-                        pass
-                await page.wait_for_timeout(1000)
-            else:
-                print("DEBUG WB: Challenge timeout")
-
-            await page.wait_for_timeout(2000)
-
-            # Now navigate to the actual product page
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            
-            # Wait for product elements to load
+            # First, wait for challenge to pass (up to 30s)
+            # Check for actual challenge PAGE (title/overlay), not just scripts in DOM
+            challenge_passed = False
             for i in range(30):
                 try:
-                    price_el = await page.query_selector('span[class*="productLinePriceWallet"], span[class*="productLinePriceNow"], [data-auto="price"]')
-                    if price_el:
-                        print(f"DEBUG WB: Product elements found at attempt {i+1}")
+                    title = await page.title()
+                    
+                    # Check for challenge interstitial page indicators
+                    challenge_page = False
+                    if "Доступ ограничен" in title or "Доступ запрещен" in title or "Challenge" in title:
+                        challenge_page = True
+                    else:
+                        # Check for visible challenge overlay/iframe
+                        try:
+                            overlay = await page.query_selector('[class*="challenge-overlay"], [class*="antibot-overlay"], iframe[src*="antibot"], iframe[src*="challenge"]')
+                            if overlay:
+                                is_visible = await overlay.is_visible()
+                                if is_visible:
+                                    challenge_page = True
+                        except Exception:
+                            pass
+                    
+                    if challenge_page:
+                        print(f"DEBUG WB: Challenge page at attempt {i+1}")
+                    else:
+                        print(f"DEBUG WB: Challenge passed at attempt {i+1}")
+                        challenge_passed = True
+                        break
+                        
+                    await page.wait_for_timeout(1000)
+                except Exception:
+                    await page.wait_for_timeout(1000)
+            else:
+                print("DEBUG WB: Challenge timeout, continuing anyway")
+                challenge_passed = True  # Continue anyway
+
+            # Then wait for product elements (up to 5s - data usually ready after challenge)
+            for i in range(5):
+                try:
+                    ready = await page.evaluate('document.querySelectorAll("[class*=\"productLinePriceWallet\"], [class*=\"productLinePriceNow\"], [data-auto=\"price\"], [data-testid=\"product-price-wallet\"], [data-testid=\"product-price-final\"]").length')
+                    if ready:
+                        print(f"DEBUG WB: Product elements ready at attempt {i+1}")
                         break
                 except Exception:
                     pass
                 await page.wait_for_timeout(1000)
             else:
-                print("DEBUG WB: Product elements timeout")
+                print("DEBUG WB: Product elements timeout, continuing anyway")
 
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(500)
 
             html_content = await page.content()
             print(f"DEBUG WB: Got HTML length: {len(html_content)}")
             await browser.close()
 
-            # Parse with BeautifulSoup (same logic as _parse_wb_playwright)
             return _parse_wb_html(html_content, url)
 
     except Exception as e:
