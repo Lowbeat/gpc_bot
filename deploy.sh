@@ -22,7 +22,7 @@ docker run -d \
   --env-file .env \
   -e PLAYWRIGHT_HEADLESS=true \
   -e TZ=Europe/Moscow \
-  -v /root/gpc_bot/Static\ content:/app/Static\ content:ro \
+  -v /data/gpc_bot/Static\ content:/app/Static\ content:ro \
   gpc_bot
 
 # Show logs
