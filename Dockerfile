@@ -2,13 +2,15 @@ FROM mcr.microsoft.com/playwright/python:v1.65.2-jammy-arm64
 
 WORKDIR /app
 
-# Install Microsoft Edge Beta for Ozon CDP (ARM64 available in beta channel)
+# Install Microsoft Edge for Ozon CDP (ARM64) - try stable repo with ARM64
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
+    gnupg \
     ca-certificates \
-    && wget -q "https://go.microsoft.com/fwlink?linkid=2149051&channel=beta&os=linux&arch=arm64" -O /tmp/edge.deb \
-    && apt-get install -y --no-install-recommends /tmp/edge.deb \
-    && rm -f /tmp/edge.deb \
+    && wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /usr/share/keyrings/microsoft-edge.gpg \
+    && echo "deb [arch=arm64 signed-by=/usr/share/keyrings/microsoft-edge.gpg] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends microsoft-edge-stable \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
