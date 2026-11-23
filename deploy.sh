@@ -9,7 +9,7 @@ echo "=== Deploying gpc_bot ==="
 git pull
 
 # Build and start via docker-compose (uses docker-compose.yml settings)
-docker-compose up -d --build
+/c/Program\ Files/Docker/Docker/resources/bin/docker-compose up -d --build
 
 # Show logs
-docker-compose logs -f
+/c/Program\ Files/Docker/Docker/resources/bin/docker-compose logs -f
