@@ -206,43 +206,42 @@ async def fetch_page(url: str) -> dict:
     domain = urlparse(url).netloc.lower().replace("www.", "")
     headers = OZON_HEADERS if "ozon.ru" in domain else HEADERS
 
-    # WB: try API first, then Playwright
+    # WB: try API first, then CDP (Edge on Windows, Chromium on Linux)
     if "wildberries.ru" in domain:
-        m = re.search(r"/catalog/(\d+)", url)
-        if m:
-            wb_data = await _fetch_wb_api(m.group(1))
-            if wb_data:
-                result = {"title": None, "description": None, "image": None, "link": url}
-                result["title"] = wb_data.get("name")
-                # WB API returns salePriceU (with card) and priceU (without card)
-                sale_price = wb_data.get("salePriceU")
-                price = wb_data.get("priceU")
-                if sale_price and price:
-                    sale_price_rub = sale_price / 100
-                    price_rub = price / 100
-                    result["price"] = f"{sale_price_rub:.0f} ({price_rub:.0f})"
-                    result["description"] = f"Цена: {sale_price_rub:.0f} ₽ ({price_rub:.0f} ₽)"
-                elif sale_price:
-                    price_rub = sale_price / 100
-                    result["price"] = f"{price_rub:.0f}"
-                    result["description"] = f"Цена: {price_rub:.0f} ₽"
-                if wb_data.get("images"):
-                    result["image"] = wb_data["images"][0]
-                elif wb_data.get("image"):
-                    result["image"] = wb_data["image"]
-                result["domain"] = domain
-                return result
+            m = re.search(r"/catalog/(\d+)", url)
+            if m:
+                wb_data = await _fetch_wb_api(m.group(1))
+                if wb_data:
+                    result = {"title": None, "description": None, "image": None, "link": url}
+                    result["title"] = wb_data.get("name")
+                    # WB API returns salePriceU (with card) and priceU (without card)
+                    sale_price = wb_data.get("salePriceU")
+                    price = wb_data.get("priceU")
+                    if sale_price and price:
+                        sale_price_rub = sale_price / 100
+                        price_rub = price / 100
+                        result["price"] = f"{sale_price_rub:.0f} ({price_rub:.0f})"
+                        result["description"] = f"Цена: {sale_price_rub:.0f} ₽ ({price_rub:.0f} ₽)"
+                    elif sale_price:
+                        price_rub = sale_price / 100
+                        result["price"] = f"{price_rub:.0f}"
+                        result["description"] = f"Цена: {price_rub:.0f} ₽"
+                    if wb_data.get("images"):
+                        result["image"] = wb_data["images"][0]
+                    elif wb_data.get("image"):
+                        result["image"] = wb_data["image"]
+                    result["domain"] = domain
+                    return result
 
-        # Fallback to Playwright
-        log.debug("WB API failed, trying Playwright for %s", url)
-        pw_result = await _parse_wb_playwright(url)
-        if pw_result and pw_result.get("title"):
-            # Playwright parser should return price as "sale (original)" format
-            if pw_result.get("price"):
-                pw_result["description"] = f"Цена: {pw_result['price']} ₽"
-            return pw_result
-        # Playwright ran but failed (likely challenge/antibot) - don't fall back to HTTP
-        raise ConnectionError("Wildberries: защита от ботов (challenge/antibot). Нужен residential IP или официальный API.")
+            # Fallback to CDP (Edge on Windows, Chromium on Linux ARM64)
+            log.debug("WB API failed, trying CDP for %s", url)
+            cdp_result = await _parse_wb_cdp(url)
+            if cdp_result and cdp_result.get("title"):
+                if cdp_result.get("price"):
+                    cdp_result["description"] = f"Цена: {cdp_result['price']} ₽"
+                return cdp_result
+            # CDP failed (likely challenge/antibot) - don't fall back to HTTP
+            raise ConnectionError("Wildberries: защита от ботов (challenge/antibot). Нужен residential IP или официальный API.")
 
     # Ozon: try CDP + internal API only (works on clean IP without proxy)
     if "ozon.ru" in domain:
@@ -868,6 +867,336 @@ async def _parse_ozon_linux_cdp(url: str) -> dict | None:
             return None
 
 
+
+async def _parse_wb_cdp(url: str) -> dict | None:
+    """Парсит WB через CDP + браузер (обходит антибот)."""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        log.warning("Playwright not installed, skipping CDP fetch")
+        return None
+
+    import asyncio
+    import platform
+    import re
+
+    # Detect platform
+    is_arm64_linux = platform.system() == "Linux" and platform.machine() in ("aarch64", "arm64")
+
+    # Edge process for Windows (needs cleanup in finally)
+    edge_proc = None
+
+    try:
+        if is_arm64_linux:
+            # Linux ARM64: use Playwright's built-in Chromium with CDP
+            result = await _parse_wb_linux_cdp(url)
+            return result
+        else:
+            # Windows: use Edge as before
+            result = await _parse_wb_windows_cdp(url)
+            return result
+    except Exception as e:
+        log.debug("WB CDP fetch failed for %s: %s", url, e)
+        import traceback
+        traceback.print_exc()
+        return None
+    finally:
+        # Cleanup Edge process on Windows
+        if edge_proc is not None:
+            try:
+                edge_proc.terminate()
+            except Exception:
+                pass
+
+
+async def _parse_wb_linux_cdp(url: str) -> dict | None:
+    """Парсит WB на Linux ARM64 через Playwright Chromium CDP."""
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+    import html
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-web-security",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ]
+        )
+        try:
+            context = await browser.new_context(
+                user_agent=HEADERS["User-Agent"],
+                locale="ru-RU",
+                viewport={"width": 1280, "height": 720},
+                java_script_enabled=True,
+                bypass_csp=True,
+            )
+            await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+            page = await context.new_page()
+
+            # Go to WB main page to establish session
+            await page.goto("https://www.wildberries.ru", wait_until="domcontentloaded", timeout=30000)
+            
+            # Wait for challenge to pass (WB challenge usually passes faster)
+            for i in range(30):
+                title = await page.title()
+                if "Доступ ограничен" in title or "Доступ запрещен" in title:
+                    print(f"DEBUG WB: Challenge/block at attempt {i+1}")
+                else:
+                    # Check if we're past the challenge
+                    try:
+                        ready = await page.evaluate('document.querySelectorAll("[class*=\"productLinePriceWallet\"], [class*=\"productLinePriceNow\"], [data-auto=\"price\"]").length')
+                        if ready:
+                            print(f"DEBUG WB: Challenge passed at attempt {i+1}")
+                            break
+                    except Exception:
+                        pass
+                await page.wait_for_timeout(1000)
+            else:
+                print("DEBUG WB: Challenge timeout")
+
+            await page.wait_for_timeout(2000)
+
+            # Now navigate to the actual product page
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            
+            # Wait for product elements to load
+            for i in range(30):
+                try:
+                    price_el = await page.query_selector('span[class*="productLinePriceWallet"], span[class*="productLinePriceNow"], [data-auto="price"]')
+                    if price_el:
+                        print(f"DEBUG WB: Product elements found at attempt {i+1}")
+                        break
+                except Exception:
+                    pass
+                await page.wait_for_timeout(1000)
+            else:
+                print("DEBUG WB: Product elements timeout")
+
+            await page.wait_for_timeout(2000)
+
+            html_content = await page.content()
+            print(f"DEBUG WB: Got HTML length: {len(html_content)}")
+            await browser.close()
+
+            # Parse with BeautifulSoup (same logic as _parse_wb_playwright)
+            return _parse_wb_html(html_content, url)
+
+        except Exception as e:
+            log.debug("WB CDP fetch failed for %s: %s", url, e)
+            import traceback
+            traceback.print_exc()
+            return None
+
+
+async def _parse_wb_windows_cdp(url: str) -> dict | None:
+    import asyncio
+    """Парсит WB на Windows через Edge CDP."""
+    import os
+    import tempfile, socket, subprocess
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+    import html
+
+    edge_paths = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    edge_path = None
+    for p in edge_paths:
+        if os.path.exists(p):
+            edge_path = p
+            break
+    if not edge_path:
+        log.debug("Edge not found, skipping CDP fetch")
+        return None
+
+    def free_port():
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    cdp_port = free_port()
+    edge_proc = subprocess.Popen([
+        edge_path,
+        f"--remote-debugging-port={cdp_port}",
+        f"--user-data-dir={tempfile.mkdtemp(prefix='wb-edge-')}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "about:blank",
+    ])
+
+    try:
+        await asyncio.sleep(3)
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp(f"http://127.0.0.1:{cdp_port}")
+            context = browser.contexts[0]
+            page = await context.new_page()
+
+            # Go to WB main page to establish session
+            await page.goto("https://www.wildberries.ru", wait_until="domcontentloaded", timeout=30000)
+            
+            # Wait for challenge to pass
+            for i in range(30):
+                title = await page.title()
+                if "Доступ ограничен" in title or "Доступ запрещен" in title:
+                    print(f"DEBUG WB: Challenge/block at attempt {i+1}")
+                else:
+                    try:
+                        ready = await page.evaluate('document.querySelectorAll("[class*=\"productLinePriceWallet\"], [class*=\"productLinePriceNow\"], [data-auto=\"price\"]").length')
+                        if ready:
+                            print(f"DEBUG WB: Challenge passed at attempt {i+1}")
+                            break
+                    except Exception:
+                        pass
+                await page.wait_for_timeout(1000)
+            else:
+                print("DEBUG WB: Challenge timeout")
+
+            await page.wait_for_timeout(2000)
+
+            # Now navigate to the actual product page
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            
+            # Wait for product elements to load
+            for i in range(30):
+                try:
+                    price_el = await page.query_selector('span[class*="productLinePriceWallet"], span[class*="productLinePriceNow"], [data-auto="price"]')
+                    if price_el:
+                        print(f"DEBUG WB: Product elements found at attempt {i+1}")
+                        break
+                except Exception:
+                    pass
+                await page.wait_for_timeout(1000)
+            else:
+                print("DEBUG WB: Product elements timeout")
+
+            await page.wait_for_timeout(2000)
+
+            html_content = await page.content()
+            print(f"DEBUG WB: Got HTML length: {len(html_content)}")
+            await browser.close()
+
+            # Parse with BeautifulSoup (same logic as _parse_wb_playwright)
+            return _parse_wb_html(html_content, url)
+
+    except Exception as e:
+        log.debug("WB CDP fetch failed for %s: %s", url, e)
+        import traceback
+        traceback.print_exc()
+        return None
+    finally:
+        try:
+            edge_proc.terminate()
+        except Exception:
+            pass
+
+
+def _parse_wb_html(html_content: str, url: str) -> dict | None:
+    """Parse WB HTML content (shared logic for both platforms)."""
+    from bs4 import BeautifulSoup
+    import html
+    import re
+
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # Title: WB uses dynamic class names like productTitle--ktP8Z
+    title = None
+    for sel in ["[class*='productTitle']", "h1[class*='title']", "h1", "h2[class*='productTitle']"]:
+        el = soup.select_one(sel)
+        if el and el.get_text(strip=True):
+            title = html.unescape(el.get_text(strip=True))
+            break
+
+    # Price: try to get both wallet price (with card) and regular price (without card)
+    price = None
+    sale_price = None
+    regular_price = None
+
+    # Wallet price (with card) - new WB uses data-testid
+    for sel in [
+        "[data-testid='product-price-wallet']",  # new WB wallet price button
+        "[data-testid='product-price']",  # generic product price
+        "span[class*='productLinePriceWallet']",  # old selector fallback
+        "[class*='price'] [class*='current']",
+        "[data-auto='price']",
+    ]:
+        el = soup.select_one(sel)
+        if el:
+            price_text = el.get_text(strip=True)
+            m = re.search(r"([\d\s]+)", price_text.replace(" ", "").replace(" ", ""))
+            if m:
+                sale_price = m.group(1).replace(" ", "")
+                break
+
+    # Regular price (without card) - NOT the crossed-out old price, but the second price
+    # New WB uses data-testid="product-price-final" for the final price
+    for sel in [
+        "[data-testid='product-price-final']",  # new WB final price (without card)
+        "span[class*='productLinePriceNow']",  # old NOW price (without card)
+        "span[class*='productLinePriceDefault']",  # old default/regular price
+        "span[class*='price-block__price']:not([class*='Wallet'])",  # old non-wallet price
+        "[class*='price-block'] span:not([class*='Wallet']):not([class*='Old'])",  # old generic
+    ]:
+        el = soup.select_one(sel)
+        if el:
+            price_text = el.get_text(strip=True)
+            m = re.search(r"([\d\s]+)", price_text.replace(" ", "").replace(" ", ""))
+            if m:
+                regular_price = m.group(1).replace(" ", "")
+                # Sanity check: regular price should be >= sale price
+                if sale_price and int(regular_price) >= int(sale_price):
+                    break
+                regular_price = None
+
+    # Fallback: old price (crossed out) - but validate it's reasonable
+    if not regular_price:
+        for sel in ["span[class*='productLinePriceOld']", "[class*='price'] [class*='old']", "span[class*='old-price']", "[class*='price-old']"]:
+            el = soup.select_one(sel)
+            if el:
+                price_text = el.get_text(strip=True)
+                m = re.search(r"([\d\s]+)", price_text.replace(" ", "").replace(" ", ""))
+                if m:
+                    candidate = m.group(1).replace(" ", "")
+                    # Only use if it's >= sale price and not absurdly high (like 18500 for a 668 item)
+                    if sale_price and int(candidate) >= int(sale_price) and int(candidate) <= int(sale_price) * 3:
+                        regular_price = candidate
+                    break
+
+    # Format price: "sale (regular)" if both found, otherwise just sale
+    if sale_price and regular_price:
+        price = f"{sale_price} ({regular_price})"
+    elif sale_price:
+        price = sale_price
+    elif regular_price:
+        price = regular_price
+
+    # Image: WB serves from basket-XX.wbbasket.ru
+    image = None
+    og_image = _meta_content(soup, property="og:image") or _meta_content(soup, name="og:image")
+    if og_image and _is_valid_image_url(_abs(og_image, url)):
+        image = _abs(og_image, url)
+    else:
+        # Also try to find images/big URLs directly
+        for sel in ["img[src*='images/big']", "img[src*='basket-'][src*='wbbasket'][src*='images']", "img[src*='images'][src*='webp']"]:
+            img = soup.select_one(sel)
+            if img:
+                src = img.get("src") or img.get("data-src") or img.get("data-src-pb")
+                if src and _is_valid_image_url(_abs(src, url)):
+                    image = _abs(src, url)
+                    break
+
+    # Fix WB thumbnail URL to get full-size image
+    # WB uses /c246x328/ in path for thumbnails, replace with /orig/
+    # Don't replace /big/ as it may be the best available for some products
+    if image:
+        image = re.sub(r'/c\d+x\d+/', '/orig/', image)
+
+    return {"title": title, "price": price, "image": image, "link": url, "domain": "wildberries.ru"}
 async def _parse_ozon_windows_cdp(url: str) -> dict | None:
     """Парсит Ozon на Windows через Edge CDP."""
     import asyncio
