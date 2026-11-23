@@ -593,56 +593,78 @@ async def _parse_ozon_playwright(url: str) -> dict | None:
 
 
 async def _parse_ozon_cdp(url: str) -> dict | None:
-    """Парсит Ozon через Edge CDP + внутренний API (обходит антибот)."""
+    """Парсит Ozon через Playwright CDP + внутренний API (обходит антибот)."""
+    # First check if playwright is available
     try:
         from playwright.async_api import async_playwright
     except ImportError:
         log.warning("Playwright not installed, skipping CDP fetch")
         return None
 
-    # Find Edge
-    import os
     import asyncio
-    edge_paths = [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-    ]
-    edge_path = None
-    for p in edge_paths:
-        if os.path.exists(p):
-            edge_path = p
-            break
-    if not edge_path:
-        log.debug("Edge not found, skipping CDP fetch")
-        return None
-
-    import tempfile, socket, subprocess
-    def free_port():
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            return s.getsockname()[1]
-
-    cdp_port = free_port()
-    profile = tempfile.mkdtemp(prefix="ozon-edge-")
-    edge_proc = subprocess.Popen([
-        edge_path,
-        f"--remote-debugging-port={cdp_port}",
-        f"--user-data-dir={tempfile.mkdtemp(prefix='ozon-edge-')}",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "about:blank",
-    ])
-
+    import platform
+    import re
+    
+    # Detect platform
+    is_arm64_linux = platform.system() == "Linux" and platform.machine() in ("aarch64", "arm64")
+    
+    # Edge process for Windows (needs cleanup in finally)
+    edge_proc = None
+    
     try:
-        await asyncio.sleep(3)
-        async with async_playwright() as p:
-            browser = await p.chromium.connect_over_cdp(f"http://127.0.0.1:{cdp_port}")
-            context = browser.contexts[0]
-            page = await context.new_page()
+        if is_arm64_linux:
+            # Linux ARM64: use Playwright's built-in Chromium with CDP
+            result = await _parse_ozon_linux_cdp(url)
+            return result
+        else:
+            # Windows: use Edge as before
+            result = await _parse_ozon_windows_cdp(url)
+            return result
+    except Exception as e:
+        log.debug("Ozon CDP fetch failed for %s: %s", url, e)
+        import traceback
+        traceback.print_exc()
+        return None
+    finally:
+        # Cleanup Edge process on Windows
+        if edge_proc is not None:
+            try:
+                edge_proc.terminate()
+            except Exception:
+                pass
 
+
+async def _parse_ozon_linux_cdp(url: str) -> dict | None:
+    """Парсит Ozon на Linux ARM64 через Playwright Chromium CDP."""
+    from playwright.async_api import async_playwright
+    import json
+    
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-web-security",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ]
+        )
+        try:
+            context = await browser.new_context(
+                user_agent=HEADERS["User-Agent"],
+                locale="ru-RU",
+                viewport={"width": 1280, "height": 720},
+                java_script_enabled=True,
+                bypass_csp=True,
+            )
+            await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
+            page = await context.new_page()
+            
             # Go to main page to establish session
             await page.goto("https://www.ozon.ru", wait_until="domcontentloaded", timeout=30000)
-            # Wait for challenge to pass (like Ozon article suggests: 2-3 sec, but give more time)
+            # Wait for challenge to pass
             for i in range(40):
                 title = await page.title()
                 if "Captcha" in title:
@@ -658,11 +680,10 @@ async def _parse_ozon_cdp(url: str) -> dict | None:
                 await page.wait_for_timeout(1000)
             else:
                 print("DEBUG: Challenge timeout")
-
+            
             await page.wait_for_timeout(3000)
-
+            
             # Extract product ID from URL (handle short URLs by navigating in browser)
-            import re
             product_id = None
             final_url = url
             
@@ -705,32 +726,35 @@ async def _parse_ozon_cdp(url: str) -> dict | None:
                 log.debug("Could not extract product ID from URL: %s", url)
                 await browser.close()
                 return None
-
-            # Call internal API using the product ID (original format that worked)
+            
+            # Call internal API using the product ID
             api_url = f"https://www.ozon.ru/api/composer-api.bx/page/json/v2?url=%2Fproduct%2F{product_id}%2F"
             log.debug("Calling Ozon API: %s", api_url)
-            fetch_js = '''
-                async ({url}) => {
-                    const res = await fetch(url, {
-            method: 'GET',
-                        credentials: 'include',
-                        headers: {'Accept': 'application/json', 'Content-Type': 'application/json'}
-                    });
-                    let json = null;
-                    try { json = await res.json(); } catch (e) {}
-                    return {status: res.status, url: res.url, json};
-                }
-            '''
+            fetch_js = (
+                "async ({url}) => {"
+                "const res = await fetch(url, {"
+                "method: 'GET',"
+                "credentials: 'include',"
+                "headers: {'Accept': 'application/json', 'Content-Type': 'application/json'}"
+                "});"
+                "let json = null;"
+                "try { json = await res.json(); } catch (e) {}"
+                "return {status: res.status, url: res.url, json};"
+                "}"
+            )
             result = await page.evaluate(fetch_js, {"url": f"https://www.ozon.ru/api/composer-api.bx/page/json/v2?url=%2Fproduct%2F{product_id}%2F"})
+            
+            print(f"DEBUG: API status={result['status']}, has_json={bool(result['json'])}")
             
             await browser.close()
             
             if result["status"] != 200 or not result["json"]:
                 log.debug("Ozon CDP API failed: status=%s", result["status"])
                 return None
-
+            
             # Parse widgetStates
             widget_states = result["json"].get("widgetStates", {})
+            print(f"DEBUG: widget_states count={len(widget_states)}")
             
             # Title from webProductHeading
             title = None
@@ -834,11 +858,257 @@ async def _parse_ozon_cdp(url: str) -> dict | None:
 
             # Fallback to og:image
             if not image:
-                # We'd need HTML for this, skip for now
                 pass
 
             return {"title": title, "price": price, "image": image, "link": url, "domain": "ozon.ru"}
+        except Exception as e:
+            log.debug("Ozon CDP fetch failed for %s: %s", url, e)
+            import traceback
+            traceback.print_exc()
+            return None
 
+
+async def _parse_ozon_windows_cdp(url: str) -> dict | None:
+    """Парсит Ozon на Windows через Edge CDP."""
+    import asyncio
+    import os
+    import tempfile, socket, subprocess
+    import json
+    from playwright.async_api import async_playwright
+    
+    edge_paths = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    edge_path = None
+    for p in edge_paths:
+        if os.path.exists(p):
+            edge_path = p
+            break
+    if not edge_path:
+        log.debug("Edge not found, skipping CDP fetch")
+        return None
+
+    def free_port():
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    cdp_port = free_port()
+    edge_proc = subprocess.Popen([
+        edge_path,
+        f"--remote-debugging-port={cdp_port}",
+        f"--user-data-dir={tempfile.mkdtemp(prefix='ozon-edge-')}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "about:blank",
+    ])
+
+    try:
+        await asyncio.sleep(3)
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp(f"http://127.0.0.1:{cdp_port}")
+            context = browser.contexts[0]
+            page = await context.new_page()
+
+            # Go to main page to establish session
+            await page.goto("https://www.ozon.ru", wait_until="domcontentloaded", timeout=30000)
+            # Wait for challenge to pass (like Ozon article suggests: 2-3 sec, but give more time)
+            for i in range(40):
+                title = await page.title()
+                if "Captcha" in title:
+                    print(f"DEBUG: Captcha detected at attempt {i+1}")
+                    break
+                if "нет соединения" in title:
+                    print(f"DEBUG: Challenge page at attempt {i+1}")
+                    break
+                ready = await page.evaluate("document.querySelectorAll('[id^=\"state-\"]').length")
+                if ready and "Antibot" not in title:
+                    print(f"DEBUG: Challenge passed at attempt {i+1}")
+                    break
+                await page.wait_for_timeout(1000)
+            else:
+                print("DEBUG: Challenge timeout")
+
+            await page.wait_for_timeout(3000)
+
+            # Extract product ID from URL (handle short URLs by navigating in browser)
+            product_id = None
+            final_url = url
+            
+            # First try to extract from full product URL - match product ID at end of path
+            # Pattern: /product/...-<id>/ or /product/...-<id>? or /product/<id>/
+            m = re.search(r"/product/.*[-_](\d+)(?:/|\?)", final_url)
+            if m:
+                product_id = m.group(1)
+            else:
+                # Fallback: try to find any numeric ID at end of path
+                m = re.search(r"/(\d+)(?:/|\?)", final_url)
+                if m:
+                    product_id = m.group(1)
+            
+            # If no product_id found and it's a short URL (ozon.ru/t/...), navigate in browser
+            if not product_id and "/t/" in url:
+                log.debug("Navigating to short URL in browser to resolve: %s", url)
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                # Wait for redirect to complete and challenge to pass on product page
+                for i in range(20):
+                    await page.wait_for_timeout(1000)
+                    title = await page.title()
+                    if "Captcha" in title or "нет соединения" in title:
+                        log.debug("Challenge on product page at attempt %d", i+1)
+                        continue
+                    break
+                await page.wait_for_timeout(3000)
+                final_url = page.url
+                log.debug("Resolved short URL in browser: %s -> %s", url, final_url)
+                # Extract product ID from resolved URL
+                m = re.search(r"/product/.*[-_](\d+)(?:/|\?)", final_url)
+                if m:
+                    product_id = m.group(1)
+                else:
+                    m = re.search(r"/(\d+)(?:/|\?)", final_url)
+                    if m:
+                        product_id = m.group(1)
+            
+            if not product_id:
+                log.debug("Could not extract product ID from URL: %s", url)
+                await browser.close()
+                return None
+
+            # Call internal API using the product ID
+            api_url = f"https://www.ozon.ru/api/composer-api.bx/page/json/v2?url=%2Fproduct%2F{product_id}%2F"
+            fetch_js = (
+                "async ({url}) => {"
+                "const res = await fetch(url, {"
+                "method: 'GET',"
+                "credentials: 'include',"
+                "headers: {'Accept': 'application/json', 'Content-Type': 'application/json'}"
+                "});"
+                "let json = null;"
+                "try { json = await res.json(); } catch (e) {}"
+                "return {status: res.status, url: res.url, json};"
+                "}"
+            )
+            result = await page.evaluate(fetch_js, {"url": f"https://www.ozon.ru/api/composer-api.bx/page/json/v2?url=%2Fproduct%2F{product_id}%2F"})
+            
+            print(f"DEBUG: API status={result['status']}, has_json={bool(result['json'])}")
+            
+            await browser.close()
+            
+            if result["status"] != 200 or not result["json"]:
+                log.debug("Ozon CDP API failed: status=%s", result["status"])
+                return None
+
+            # Parse widgetStates
+            widget_states = result["json"].get("widgetStates", {})
+            print(f"DEBUG: widget_states count={len(widget_states)}")
+
+            # Title
+            title = None
+            for key, value in widget_states.items():
+                if key.startswith("webProductHeading"):
+                    try:
+                        data = json.loads(value)
+                        title = data.get("title")
+                        if title:
+                            break
+                    except Exception:
+                        pass
+
+            # Price from webPrice (and variants like webPriceDecreasedCompact)
+            card_price = None
+            regular_price = None
+            original_price = None
+            # Collect all webPrice widgets, prefer the one with actual price data
+            webprice_widgets = []
+            for key, value in widget_states.items():
+                if key.startswith("webPrice"):
+                    try:
+                        data = json.loads(value)
+                        webprice_widgets.append((key, data))
+                    except Exception:
+                        pass
+
+            # First, try to find a widget with actual numeric prices
+            numeric_price_widget = None
+            for key, data in webprice_widgets:
+                card_price = data.get("cardPrice")
+                regular_price = data.get("price")
+                original_price = data.get("originalPrice")
+                # Check if this widget has actual numeric prices
+                has_numeric_price = any(v for v in [card_price, regular_price, original_price] if v and any(c.isdigit() for c in str(v)))
+                if has_numeric_price:
+                    numeric_price_widget = (key, data, card_price, regular_price, original_price)
+                    break
+
+            # If no widget with numeric prices, fall back to first widget (might have textRs only)
+            if numeric_price_widget is None and webprice_widgets:
+                key, data = webprice_widgets[0]
+                card_price = data.get("cardPrice")
+                regular_price = data.get("price")
+                original_price = data.get("originalPrice")
+                text_rs = data.get("textRs", [])
+                if card_price is None and text_rs and isinstance(text_rs, list):
+                    card_price = text_rs[0].get("content")
+            else:
+                key, data, card_price, regular_price, original_price = numeric_price_widget
+
+            # Format price: "cardPrice (regularPrice)" like WB
+            price_parts = []
+            if card_price:
+                card_clean = re.sub(r"[^\d]", "", card_price)
+                price_parts.append(card_clean)
+            if regular_price and regular_price != card_price:
+                reg_clean = re.sub(r"[^\d]", "", regular_price)
+                price_parts.append(reg_clean)
+            # Skip original_price unless it's different from regular
+            if original_price and original_price != regular_price:
+                orig_clean = re.sub(r"[^\d]", "", original_price)
+                price_parts.append(orig_clean)
+            if len(price_parts) >= 2:
+                price = f"{price_parts[0]} ({price_parts[1]})"
+            elif len(price_parts) == 1:
+                price = price_parts[0]
+            else:
+                price = None
+
+            # Image from webGallery (higher quality) or webStickyProducts/webPdpGrid
+            image = None
+            for key, value in widget_states.items():
+                if key.startswith("webGallery"):
+                    try:
+                        data = json.loads(value)
+                        # Get first image from gallery (highest quality)
+                        images = data.get("images", [])
+                        if images:
+                            img_url = images[0].get("src") or images[0].get("imageUrl") or images[0].get("url")
+                            if img_url and img_url.startswith("http"):
+                                # Remove size constraints like /c50/ for higher quality (like WB /orig/)
+                                image = re.sub(r"/c\d+/", "/", img_url)
+                                break
+                    except Exception:
+                        pass
+
+            # Fallback to webStickyProducts or webPdpGrid
+            if not image:
+                for key, value in widget_states.items():
+                    if key.startswith("webStickyProducts") or key.startswith("webPdpGrid"):
+                        try:
+                            data = json.loads(value)
+                            img_url = data.get("coverImageUrl") or data.get("imageUrl") or data.get("image")
+                            if img_url and img_url.startswith("http"):
+                                # Remove size constraints
+                                image = re.sub(r"/c\d+/", "/", img_url)
+                                break
+                        except Exception:
+                            pass
+
+            # Fallback to og:image
+            if not image:
+                pass
+
+            return {"title": title, "price": price, "image": image, "link": url, "domain": "ozon.ru"}
     except Exception as e:
         log.debug("Ozon CDP fetch failed for %s: %s", url, e)
         import traceback
@@ -849,100 +1119,3 @@ async def _parse_ozon_cdp(url: str) -> dict | None:
             edge_proc.terminate()
         except Exception:
             pass
-
-
-async def _parse_aliexpress_playwright(url: str) -> dict | None:
-    """Парсит AliExpress через Playwright (обходит капчу/anti-bot)."""
-    html_content = await _fetch_with_playwright(
-        url,
-        wait_selector="[data-spm-anchor-id*='a2g'], h1, [class*='product-title'], [class*='title'], [class*='price']",
-        wait_timeout=120000
-    )
-    if not html_content:
-        return None
-
-    soup = BeautifulSoup(html_content, "html.parser")
-
-    # Check for challenge page
-    if "captcha" in html_content.lower() or "проверка" in html_content.lower() or "verify" in html_content.lower() or "slide to verify" in html_content.lower():
-        log.debug("AliExpress challenge/captcha detected")
-        return None
-
-    # Title: try multiple selectors
-    title = None
-    for sel in [
-        "h1[data-spm-anchor-id*='title']",
-        "h1[class*='product-title']",
-        "h1[class*='title']",
-        "h1",
-        "[data-spm-anchor-id*='title']",
-        ".product-title",
-        "[class*='product-title']",
-    ]:
-        el = soup.select_one(sel)
-        if el and el.get_text(strip=True):
-            title = html.unescape(el.get_text(strip=True))
-            break
-
-    # Price: look for two prices (combo/box price and direct order price)
-    # AliExpress typically shows combo price first (lower), then regular price
-    price_combo = None  # цена для комбо корзины (ниже)
-    price_regular = None  # цена для заказа сразу (выше)
-
-    # Try to find price elements
-    price_elements = soup.select("[class*='price'], [class*='Price'], [data-spm-anchor-id*='price']")
-    for el in price_elements:
-        text = el.get_text(strip=True)
-        import re
-        # Find all numbers in the text
-        nums = re.findall(r"[\d\s]+[.,]?\d*", text.replace("\u00a0", "").replace(" ", ""))
-        for num in nums:
-            try:
-                val = int(float(num.replace(",", ".")))
-                if val > 0:
-                    if price_combo is None or val < price_combo:
-                        price_combo = val
-                    elif val > price_combo and (price_regular is None or val < price_regular):
-                        price_regular = val
-            except Exception:
-                pass
-
-    # Also check for specific data attributes or meta tags
-    if price_combo is None:
-        # Try og:price
-        og_price = _meta_content(soup, property="og:price:amount") or _meta_content(soup, name="og:price:amount")
-        if og_price:
-            try:
-                price_combo = int(float(og_price))
-            except Exception:
-                pass
-
-    # Format price: "combo (regular)" if both found
-    price = None
-    if price_combo and price_regular:
-        price = f"{price_combo} ({price_regular})"
-    elif price_combo:
-        price = str(price_combo)
-    elif price_regular:
-        price = str(price_regular)
-
-    # Image
-    image = None
-    og_image = _meta_content(soup, property="og:image") or _meta_content(soup, name="og:image")
-    if og_image and _is_valid_image_url(_abs(og_image, url)):
-        image = _abs(og_image, url)
-    else:
-        for sel in [
-            "img[class*='product']",
-            "img[class*='gallery']",
-            "img[src*='alicdn']",
-            "img[src*='ae01']",
-        ]:
-            img = soup.select_one(sel)
-            if img:
-                src = img.get("src") or img.get("data-src") or img.get("data-original")
-                if src and _is_valid_image_url(_abs(src, url)):
-                    image = _abs(src, url)
-                    break
-
-    return {"title": title, "price": price, "image": image, "link": url, "domain": "aliexpress.ru"}
